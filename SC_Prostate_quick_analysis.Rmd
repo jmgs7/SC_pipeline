@@ -53,7 +53,7 @@ Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csi
 
 ```{r import_raw_data}
 
-run1.raw <- readRDS("Data/run1/C1_Seurat.rds")
+run1.raw <- readRDS("../Data/run1/C1_Seurat.rds")
 run1.raw
 ```
 
@@ -71,7 +71,7 @@ head(colnames(run1.raw[['RNA']]$counts), 10)
 
 ```{r import_data}
 
-run1 <- readRDS("Data/run1/C1_Seurat_Edu.rds")
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds")
 run1
 ```
 
@@ -208,13 +208,13 @@ plot1 + plot2
 
 ## 4. Linear dimensional reduction (PCA).
 
-```{r PCA, echo=FALSE, fig.height=6, fig.width=6}
+```{r PCA, echo=FALSE, fig.height=6, fig.width=10}
 
 run1.subset <- RunPCA(run1.subset) #features = VariableFeatures(object = run1.subset))
 
 DimPlot(run1.subset, reduction = 'pca') + NoLegend() # An unique PCA is not enough to separate cell groups.
 
-ElbowPlot(run1.subset)
+ElbowPlot(run1.subset, ndims = 50)
 ```
 
 ```{r PCA_heatmap, echo = FALSE, fig.height=15, fig.width=10}
@@ -234,7 +234,7 @@ run1.subset <- FindNeighbors(run1.subset, dims = 1:20)
 run1.subset <- FindClusters(run1.subset) # Default resolution = 0.8
 ```
 
-```{r cluster_visualization, echo=FALSE}
+```{r cluster_visualization, echo=FALSE, fig.height=6, fig.width=10}
 
 run1.subset <- RunUMAP(run1.subset, dims = 1:20)
 DimPlot(run1.subset, reduction = 'umap', label = TRUE)
@@ -242,19 +242,19 @@ DimPlot(run1.subset, reduction = 'umap', label = TRUE)
 
 ```{r saving_data, eval=FALSE}
 
-saveRDS(run1, file = "Ouput/output_from_raw.rds")
+saveRDS(run1, file = "../Ouput/Run1_raw.rds")
 ```
 
 # Data analysis using pre-processed data.
 
-```{r oneliner, echo=FALSE}
+```{r oneliner, echo=FALSE, fig.height=6, fig.width=10}
 
-run1 <- readRDS("Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:20) %>% RunUMAP(dims = 1:20) %>% FindClusters()
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:20) %>% RunUMAP(dims = 1:20) %>% FindClusters()
 
 DimPlot(run1, label = TRUE)
 ```
 
-```{r}
+```{r PCA_Edu, echo=FALSE, fig.height=6, fig.width=10}
 
-ElbowPlot(run1, ndims = 50, reduction = 'pca')
+ElbowPlot(run1, ndims = 50)
 ```
