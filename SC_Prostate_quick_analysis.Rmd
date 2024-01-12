@@ -29,7 +29,8 @@ knitr::opts_chunk$set(
   warning = FALSE,
   time_it = TRUE,
   error = TRUE,
-  echo = TRUE
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
 )
 ```
 
@@ -45,6 +46,8 @@ library(dplyr)
 library(patchwork)
 library(sctransform)
 library(ggplot2)
+library(DoubletFinder) # Remove multiplets.
+# library(DropletUtils) # File conversion for CellBender.
 ```
 
 ## 1. Import data and exploratory analysis.
@@ -67,6 +70,32 @@ run1.raw[['RNA']]$counts[1:5,1:5]
 
 head(colnames(run1.raw[['RNA']]$counts), 10)
 # Cells are identified by an integer, not their UMI.
+```
+
+Export data to h5 format to use in CellBender.
+
+```{r export_h5e}
+# write10xCounts("../Data/run1/run1_raw.h5", run1.raw@assays$RNA@counts)
+```
+
+Call CellBender from system to remove background RNA (WARNING: Computationally expensive. Run in HPC server and enable the - - cuda option when possible)
+
+!! Problems: Need parameter adjusting. Data presents serious degradation and a high % of mitochondrial genes, so the deep learning algorithms implemented in CellBender caputures a large amount of counts as ambient RNA, causing a severe cell number reduction after filtering.
+
+Particularization is extremely expensive as we need to run the inference process multiple time for each parameter iteration in the optimization process. Also, no GPU acceleration is available.
+
+```{bash engine.opts='-l'}
+
+# ~/anaconda3/envs/cellbender/bin/cellbender remove-background --input "../Data/run1/run1_raw.h5" --output "../Data/run1/run1_raw_clean.h5"
+
+# ~/anaconda3/envs/cellbender/bin/ptrepack --complevel 5 "../Data/run1/run1_clean.h5":/matrix "../Data/run1/run1_clean_seurat.h5":/matrix
+```
+
+```{r load_clean}
+
+# run1.raw <- Read10X_h5(filename = "../Data/run1/run1_clean_seurat.h5")
+# run1.raw <- CreateSeuratObject(run1.raw)
+# run1.raw
 ```
 
 ### 1.2. Pre-processed counts.
@@ -95,10 +124,11 @@ head(colnames(run1[['RNA']]$counts), 10)
 run1.raw[['percent.mt']] <- PercentageFeatureSet(run1.raw, pattern = "^MT-")
 
 run1.raw[['percent.mt']][1:5,]
-
 ```
 
 ### 2.2. QC visualization.
+
+VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
 
@@ -166,13 +196,24 @@ run1.subset
 # run1.subset
 ```
 
+#### C. Custom filtering.
+
+```{r filtering_custom}
+
+# # Using parameters estimated by Edu.
+# 
+# run1.subset <- subset(run1.raw, subset = nFeature_RNA > 91.585 & nFeature_RNA < 7846.18 & percent.mt < 25)
+# 
+# run1.subset
+```
+
 #### 2.4. Normalization using SCTransform.
 
 ```{r SCTransform}
 
 # Filtered using 2.3.A.: 1% top and bottom percentiles.
 
-run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
+run1.subset <- SCTransform(run1.subset, vst.flavor = "v2") #, vars.to.regress = "percent.mt")
 ```
 
 ### 2.5. Visualizing QC parameters after normalization.
@@ -221,39 +262,72 @@ ElbowPlot(run1.subset, ndims = 50)
 
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
 
-DimHeatmap(run1.subset, dims = 1:20, balanced = TRUE)
+DimHeatmap(run1.subset, dims = 1:30, balanced = TRUE)
 ```
 
 ```{r PCA_top_features, fig.height=30, fig.width=15}
 
-VizDimLoadings(run1.subset, dims = 1:20, reduction = 'pca')
+VizDimLoadings(run1.subset, dims = 1:30, reduction = 'pca')
 ```
 
 ## 5. Clustering
 
 ```{r clustering}
-run1.subset <- FindNeighbors(run1.subset, dims = 1:20)
+run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
 run1.subset <- FindClusters(run1.subset) # Default resolution = 0.8
+run1.subset <- RunUMAP(run1.subset, dims = 1:30)
 ```
 
 ```{r cluster_visualization, fig.height=6, fig.width=10}
 
-run1.subset <- RunUMAP(run1.subset, dims = 1:20)
 DimPlot(run1.subset, reduction = 'umap', label = TRUE)
+```
+
+Cluster QC.
+
+```{r cluster_QC}
+
+#Visualize QC metrics as a violin plot
+VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+
+# Zoom in on nCount_RNA violin plot.
+VlnPlot(run1.subset, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+
+#Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt") 
+plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
+plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
 ```{r saving_data, eval=FALSE, echo = FALSE}
 
-saveRDS(run1, file = "../Ouput/Run1_raw.rds")
+saveRDS(run1, file = "../Output/Run1_raw.rds")
 ```
 
 # Data analysis using pre-processed data.
 
 ```{r oneliner, fig.height=6, fig.width=10}
 
-run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:20) %>% RunUMAP(dims = 1:20) %>% FindClusters()
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% RunUMAP(dims = 1:30) %>% FindClusters()
+```
 
-DimPlot(run1, label = TRUE)
+```{r fig.height=6, fig.width=10}
+
+DimPlot(run1, reduction = 'umap', label = TRUE)
+```
+
+```{r oneliner_QC fig.height=6, fig.width=10}
+
+#Visualize QC metrics as a violin plot
+VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+
+# Zoom in on nCount_RNA violin plot.
+VlnPlot(run1.subset, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+
+#Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt") 
+plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
+plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
 ```{r PCA_Edu, fig.height=6, fig.width=10}

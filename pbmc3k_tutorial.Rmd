@@ -111,7 +111,7 @@ dense.size / sparse.size # Ocupa 24 veces menos espacio.
 
 </details>
 
- Data exploration:
+Data exploration:
 
 ```{r}
 
