@@ -73,7 +73,7 @@ In the script below we created a loop that test all values for resolution in a c
 ```{r}
 
 # Set the range of values with an increment of 0.1
-start_value <- 0.4
+start_value <- 0.1
 end_value <- 1.2
 increment <- 0.1
 
@@ -123,5 +123,7 @@ resolution_values <- unlist(resolution_values)
 nClusters <- unlist(nClusters)
 
 # Plot number of clusters against resolution.
-plot(resolution_values, nClusters)
+plot(resolution_values, nClusters, ylim = c(0,max(nClusters)))
 ```
+
+After analyzing the results, we will use a resolution value of 0.8, as the region between 0.6-0.9 seems the most stable, and 0.8 offers the maximum number of distinct clusters within that range while also being the default for the FindClusters() function.
