@@ -269,6 +269,8 @@ DimPlot(run1.subset, reduction = 'pca') + NoLegend() # An unique PCA is not enou
 ElbowPlot(run1.subset, ndims = 50)
 ```
 
+In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
+
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
 
 DimHeatmap(run1.subset, dims = 1:30, balanced = TRUE)
@@ -282,6 +284,8 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = 'pca')
 ## 5. Clustering
 
 ```{r clustering}
+
+# Resolution fine-tuned in a separate Rmd.
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
 run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
 run1.subset <- RunUMAP(run1.subset, dims = 1:30)
@@ -317,13 +321,19 @@ saveRDS(run1, file = "../Output/Run1_raw.rds")
 
 Cell annotation is performed using the Human Cell Atlas as reference.
 
+SingleR.annotation uses the logcounts provided in the count matrix of the SingleCellExperiment object by default. Nevertheless,
+
 ```{r annotation}
 
+# Using celldex and SingleR packages.
+# Download reference data from celldex.
 reference <- HumanPrimaryCellAtlasData()
 
+# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
 run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
 
-SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, num.threads = detectCores())
+# Anotate using raw counts. 
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, num.threads = detectCores())
 
 run1.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -345,7 +355,7 @@ clusters <- as.character(levels(clusters)[clusters])
 
 run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
 
-SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
 run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```
@@ -402,7 +412,7 @@ ElbowPlot(run1, ndims = 50)
 
 run1.SCexp <- as.SingleCellExperiment(run1)
 
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = 'counts', labels = reference$label.main, num.threads = detectCores()) 
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = 'logcounts', labels = reference$label.main, num.threads = detectCores()) 
 
 run1[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -420,7 +430,7 @@ clusters <- as.character(levels(clusters)[clusters])
 
 run1.SCexp <- as.SingleCellExperiment(run1)
 
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
 run1[["cluster.labels"]] <- SingleR.annotation$labels
 
