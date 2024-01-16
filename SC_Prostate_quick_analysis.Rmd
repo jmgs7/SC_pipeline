@@ -3,8 +3,8 @@ title: "SC_Prostate_quick_analysis"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -38,16 +38,24 @@ knitr::opts_chunk$set(
 
 Analyiis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering. An analysis using the Seurat package (<https://satijalab.org/seurat/>) was done by the CSIC staff using the seven bridges platform, but an obsolete normalization method was used. This R markdown file describes a preliminary analysis for the first of the four runs the project contains.
 
-```{r libraries}
+```{r libraries, include = FALSE}
 
 library(Seurat)
-library(SeuratData)
 library(dplyr)
 library(patchwork)
 library(sctransform)
 library(ggplot2)
-library(DoubletFinder) # Remove multiplets.
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(parallel)  # detectCores()
+library(future) # Allows parallelization in Seurat.
+# library(SeuratData) # Allows file conversion for the CellBender pipeline.
+# library(DoubletFinder) # Remove multiplets. Not aplicable to mixed samples.
 # library(DropletUtils) # File conversion for CellBender.
+
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = detectCores())
 ```
 
 ## 1. Import data and exploratory analysis.
@@ -128,15 +136,13 @@ run1.raw[['percent.mt']][1:5,]
 
 ### 2.2. QC visualization.
 
-VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
-
 ```{r QC_visualization, fig.height=6, fig.width=10}
 
 #Visualize QC metrics as a violin plot
 VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
-# Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(run1.raw, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
 
 #Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.mt") 
@@ -151,18 +157,21 @@ plot1 + plot2
 
 ```{r filtering_percentiles}
 
+# Remove Undetermined and multiplets.
+run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Name != "Multiplet")
+
 minCov=1000 #if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good. 
-  if(min(run1.raw$nCount_RNA)>=minCov){
-    countLOW=min(run1.raw$nCount_RNA)
+  if(min(run1.subset$nCount_RNA)>=minCov){
+    countLOW=min(run1.subset$nCount_RNA)
   }else{
-    countLOW=quantile(run1.raw$nCount_RNA, prob=c(0.01))  
+    countLOW=quantile(run1.subset$nCount_RNA, prob=c(0.01))  
  }
- countHIGH=quantile(run1.raw$nCount_RNA, prob=0.99)
- featureHIGH=quantile(run1.raw$nFeature_RNA, prob=0.99)
- featureLOW=quantile(run1.raw$nFeature_RNA, prob=0.01)
+ countHIGH=quantile(run1.subset$nCount_RNA, prob=0.99)
+ featureHIGH=quantile(run1.subset$nFeature_RNA, prob=0.99)
+ featureLOW=quantile(run1.subset$nFeature_RNA, prob=0.01)
 
 # subset
-run1.subset <- subset(run1.raw, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW  & nCount_RNA < countHIGH & percent.mt < 25)
+run1.subset <- subset(run1.subset, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW  & nCount_RNA < countHIGH & percent.mt < 25)
 
 run1.subset
 ```
@@ -207,24 +216,24 @@ run1.subset
 # run1.subset
 ```
 
-#### 2.4. Normalization using SCTransform.
+### 2.4. Normalization using SCTransform.
 
 ```{r SCTransform}
 
-# Filtered using 2.3.A.: 1% top and bottom percentiles.
+# Filtered using 2.3.A.: 1% top and bottom percentiles, removing undetermined and multiplets.
 
-run1.subset <- SCTransform(run1.subset, vst.flavor = "v2") #, vars.to.regress = "percent.mt")
+run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
 ```
 
 ### 2.5. Visualizing QC parameters after normalization.
 
-```{r QC_norm}
+```{r QC_norm, fig.height=6, fig.width=10}
 
 #Visualize QC metrics as a violin plot
 VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
 # Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.subset, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
 
 #Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt") 
@@ -274,7 +283,7 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = 'pca')
 
 ```{r clustering}
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
-run1.subset <- FindClusters(run1.subset) # Default resolution = 0.8
+run1.subset <- FindClusters(run1.subset, resolution = 1.2) # Default resolution = 0.8
 run1.subset <- RunUMAP(run1.subset, dims = 1:30)
 ```
 
@@ -285,13 +294,13 @@ DimPlot(run1.subset, reduction = 'umap', label = TRUE)
 
 Cluster QC.
 
-```{r cluster_QC}
+```{r cluster_QC, fig.height=6, fig.width=10}
 
 #Visualize QC metrics as a violin plot
 VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
 
-# Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.subset, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
 
 #Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt") 
@@ -299,38 +308,128 @@ plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeatu
 plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
-```{r saving_data, eval=FALSE, echo = FALSE}
+```{r saving_data, eval = FALSE, echo = FALSE}
 
 saveRDS(run1, file = "../Output/Run1_raw.rds")
+```
+
+## 6. Annotation.
+
+Cell annotation is performed using the Human Cell Atlas as reference.
+
+```{r annotation}
+
+reference <- HumanPrimaryCellAtlasData()
+
+run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
+
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, num.threads = detectCores())
+
+run1.subset[["cell.labels"]] <- SingleR.annotation$labels
+```
+
+```{r annotation_vis, fig.height=6, fig.width=10}
+
+DimPlot(run1.subset, reduction = 'umap', group.by = 'cell.labels', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+By cluster annotation:
+
+```{r cluster_annotation}
+
+clusters <- run1.subset@meta.data[["seurat_clusters"]]
+clusters <- as.character(levels(clusters)[clusters])
+
+
+# reference <- HumanPrimaryCellAtlasData()
+
+run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
+
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+
+run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
+```
+
+```{r set_ids}
+
+new.clusters.ids <- SingleR.annotation$labels
+names(new.clusters.ids) <- levels(run1.subset)
+run1.subset <- RenameIdents(run1.subset, new.clusters.ids)
+```
+
+```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+
+DimPlot(run1.subset, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
 # Data analysis using pre-processed data.
 
 ```{r oneliner, fig.height=6, fig.width=10}
 
-run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% RunUMAP(dims = 1:30) %>% FindClusters()
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% FindClusters(resolution = 1.2) %>% RunUMAP(dims = 1:30)
 ```
 
-```{r fig.height=6, fig.width=10}
+```{r  oneliner_clusters, fig.height=6, fig.width=10}
 
 DimPlot(run1, reduction = 'umap', label = TRUE)
 ```
 
-```{r oneliner_QC fig.height=6, fig.width=10}
+```{r oneliner_QC, fig.height=6, fig.width=10}
 
 #Visualize QC metrics as a violin plot
-VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+VlnPlot(run1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
 
-# Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.subset, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(run1, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
 
 #Visualize relationships in metadata to detect outliers with FeatureScatter function
-plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt") 
-plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
+plot1 <- FeatureScatter(run1, feature1 = "nCount_RNA", feature2 = "percent.mt") 
+plot2 <- FeatureScatter(run1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
 plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
 ```{r PCA_Edu, fig.height=6, fig.width=10}
 
 ElbowPlot(run1, ndims = 50)
+```
+
+```{r pre_annotation}
+
+# reference <- HumanPrimaryCellAtlasData()
+
+run1.SCexp <- as.SingleCellExperiment(run1)
+
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = 'counts', labels = reference$label.main, num.threads = detectCores()) 
+
+run1[["cell.labels"]] <- SingleR.annotation$labels
+```
+
+```{r pre_annotation_vis, fig.height=6, fig.width=10}
+DimPlot(run1, reduction = 'umap', group.by = 'cell.labels', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+```{r pre_cluster_annotation}
+
+clusters <- run1@meta.data[["seurat_clusters"]]
+clusters <- as.character(levels(clusters)[clusters])
+
+# reference <- HumanPrimaryCellAtlasData()
+
+run1.SCexp <- as.SingleCellExperiment(run1)
+
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+
+run1[["cluster.labels"]] <- SingleR.annotation$labels
+
+```
+
+```{r pre_cluster_ids}
+new.clusters.ids <- SingleR.annotation$labels
+names(new.clusters.ids) <- levels(run1) 
+run1 <- RenameIdents(run1, new.clusters.ids)
+```
+
+```{r pre_cluster_anno_vis, fig.height=6, fig.width=10}
+
+DimPlot(run1, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```

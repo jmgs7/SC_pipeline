@@ -1,0 +1,87 @@
+---
+title: "Resolution testing."
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+all_times <- list()  # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+# Resolution value fine-tuning.
+
+As reported by the Seurat team. A resolution value between 0.4 - 1.2 works well for an assay of 3k cells.
+
+Here we implement a loop that tests different resolution values with an increment of 0.1 between these two values.
+
+We will use Edu's pre-processed data.
+
+```{r libraries, include = FALSE}
+
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(sctransform)
+library(ggplot2)
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(parallel)  # detectCores()
+library(future) # Allows parallelization in Seurat.
+
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = detectCores())
+```
+
+```{r previous_steps}
+
+test <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
+
+
+```
+
+```{r}
+
+# Set the range of values with an increment of 0.1
+start_value <- 0.4
+end_value <- 1.2
+increment <- 0.1
+
+
+# Create a loop to test the function with incremental values
+output_list <- list()
+for (i in seq(start_value, end_value, by = increment)) {
+  output <- FindClusters(test, resolution = i) %>% RunUMAP(dims = 1:30)
+  output_list[[length(output_list) + 1]] <- output
+  cat("Calculated for restolution = ", i, "\n")
+}
+```
+
+```{r}
+
+# Write loop for plotting.
+```
