@@ -283,7 +283,7 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = 'pca')
 
 ```{r clustering}
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
-run1.subset <- FindClusters(run1.subset, resolution = 1.2) # Default resolution = 0.8
+run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
 run1.subset <- RunUMAP(run1.subset, dims = 1:30)
 ```
 
@@ -352,7 +352,10 @@ run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
 
 ```{r set_ids}
 
-new.clusters.ids <- SingleR.annotation$labels
+cluster_number <- levels(run1.subset[["seurat_clusters"]][1,])
+cluster_annotation <- SingleR.annotation$labels
+
+new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
 names(new.clusters.ids) <- levels(run1.subset)
 run1.subset <- RenameIdents(run1.subset, new.clusters.ids)
 ```
@@ -366,7 +369,7 @@ DimPlot(run1.subset, reduction = 'umap', label = TRUE, repel = TRUE, label.size 
 
 ```{r oneliner, fig.height=6, fig.width=10}
 
-run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% FindClusters(resolution = 1.2) %>% RunUMAP(dims = 1:30)
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% FindClusters(resolution = 0.8) %>% RunUMAP(dims = 1:30)
 ```
 
 ```{r  oneliner_clusters, fig.height=6, fig.width=10}
@@ -424,12 +427,23 @@ run1[["cluster.labels"]] <- SingleR.annotation$labels
 ```
 
 ```{r pre_cluster_ids}
-new.clusters.ids <- SingleR.annotation$labels
-names(new.clusters.ids) <- levels(run1) 
+
+cluster_number <- levels(run1[["seurat_clusters"]][1,])
+cluster_annotation <- SingleR.annotation$labels
+
+new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
+names(new.clusters.ids) <- levels(run1)
 run1 <- RenameIdents(run1, new.clusters.ids)
 ```
 
 ```{r pre_cluster_anno_vis, fig.height=6, fig.width=10}
 
 DimPlot(run1, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+```{r}
+
+plot <-  (DimPlot(run1, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3))))
+
+ggsave(filename = "../Output/images/example.jpg", height = 6, width = 10, plot = plot, quality = 50)
 ```
