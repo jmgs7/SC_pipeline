@@ -2,7 +2,9 @@
 title: "Resolution testing."
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -112,7 +114,7 @@ for (i in seq(start_value, end_value, by = increment)) {
   cat("Calculated and plotted for resolution = ", i, "\n")
 }
 
-
+# Clean variables to save memory.
 rm(output)
 rm(output_clusters)
 rm(plot)
