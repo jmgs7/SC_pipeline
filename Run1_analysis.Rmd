@@ -6,8 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-
-all_times <- list()  # store the time for each chunk
+all_times <- list() # store the time for each chunk
 knitr::knit_hooks$set(time_it = local({
   now <- NULL
   function(before, options) {
@@ -32,22 +31,134 @@ knitr::opts_chunk$set(
 )
 ```
 
-## R Markdown
+# SC_Prostate_Run_1 analysis.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Analyiis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering. An analysis using the Seurat package (<https://satijalab.org/seurat/>) was done by the CSIC staff using the seven bridges platform, but an obsolete normalization method was used. This R markdown file describes a preliminary analysis for the first of the four runs the project contains.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r libraries, include = FALSE}
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(sctransform)
+library(ggplot2)
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(parallel) # detectCores()
+library(future) # Allows parallelization in Seurat.
+# library(SeuratData) # Allows file conversion for the CellBender pipeline.
+# library(DoubletFinder) # Remove multiplets. Not aplicable to mixed samples.
+# library(DropletUtils) # File conversion for CellBender.
 
-```{r cars}
-summary(cars)
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = detectCores())
 ```
 
-## Including Plots
+## 1. Import data and exploratory analysis.
 
-You can also embed plots, for example:
+Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada).
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+These data contains raw counts and a previously normalized dataset. Nevertheless, we re-run the normalization using the new SCTransform method.
+
+```{r import_data}
+run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
+run1 # Show information about the Seurat object.
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Data from run1 contained 3809 cells originally . After eliminating cells tagged (they are label at `run1@metadata[["Sample_Tag"]])`\` as "undetermined" (no UMIs) or "multiplet" (droplets with more than 1 cell), 3118 cells remained. Next, 3 criteria was followed in order to filter the cells:
+
+-   Cells with less than 7846.18 genes.
+
+-   Cells with more than 91.585 genes.
+
+-   Cells with a percentage of mitochondrial genes lower than 25%.
+
+After those filters, the 2151 cells reported by the command above remained.
+
+Problem is, apart from the fact the use of float values for the number of genes is sort of confusing, we don't have any kind of information about the methodology followed to obtain these values.
+
+By using our own data-driven method (removal of the top and bottom 1% percentiles of cells by their number of genes and cells with more than 25% of mitochondrial genes) we obtain very close results, with 2135 cells kept after the filtering.
+
+Nevertheless, as the raw count matrix provided is lacking some essential information such as the cells' sample and group, is not possible to follow this approach and we depend on the CSIC staff's pre-analysed data.
+
+It is necessary to either obtain the correct count matrix or elucidate how the previous data processing was performed.
+
+## 2. QC.
+
+We will use the raw data in order to visualize QC parameters.
+
+```{r import_raw_data}
+run1.raw <- readRDS("../Data/run1/C1_Seurat.rds")
+run1.raw
+```
+
+### 2.1. Mitochondrial gene percentage calculation.
+
+```{r mito_genes}
+run1.raw[["percent.mt"]] <- PercentageFeatureSet(run1.raw, pattern = "^MT-")
+
+run1.raw[["percent.mt"]][1:5, ]
+```
+
+### 2.2. QC visualization.
+
+```{r QC_visualization, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(run1.raw, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+### 2.3. Filtering cells.
+
+#### A. Filtering 1 % top and bottom percentiles.
+
+```{r filtering_percentiles}
+# Remove Undetermined and multiplets.
+run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Name != "Multiplet")
+
+# Filter the 1% top and bottom percentiles.
+minCov <- 1000 # if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good.
+if (min(run1.subset$nCount_RNA) >= minCov) {
+  countLOW <- min(run1.subset$nCount_RNA)
+} else {
+  countLOW <- quantile(run1.subset$nCount_RNA, prob = c(0.01))
+}
+countHIGH <- quantile(run1.subset$nCount_RNA, prob = 0.99)
+featureHIGH <- quantile(run1.subset$nFeature_RNA, prob = 0.99)
+featureLOW <- quantile(run1.subset$nFeature_RNA, prob = 0.01)
+
+# subset
+run1.subset <- subset(run1.subset, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW & nCount_RNA < countHIGH & percent.mt < 25)
+
+run1.subset
+```
+
+### 2.4. Normalization using SCTransform.
+
+```{r SCTransform}
+# Filtered using 2.3.A.: 1% top and bottom percentiles, removing undetermined and multiplets.
+
+run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
+```
+
+### 2.5. Visualizing QC parameters after normalization.
+
+```{r QC_norm, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Zoom in on nCount_RNA violin plot.
+VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
