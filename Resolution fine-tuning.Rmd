@@ -40,8 +40,6 @@ As reported by the Seurat team. A resolution value between 0.4 - 1.2 works well 
 
 Here we implement a loop that tests different resolution values with an increment of 0.1 between these two values.
 
-We will use Edu's pre-processed data.
-
 First, we import all necessary libraries.
 
 ```{r libraries, include = FALSE}
@@ -65,9 +63,28 @@ Load the data and apply the basic pipeline in one line.
 
 ```{r previous_steps}
 
-test <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
+rm(test)
+
+test <- readRDS("~/Documents/SC_Prostate/Data/run2/C2_expected.rds") %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% 
+  subset(Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
+
+# Filter the 1% top and bottom percentiles.
+minCov <- 1000 # if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good.
+if (min(test$nCount_RNA) >= minCov) {
+  countLOW <- min(test$nCount_RNA)
+} else {
+  countLOW <- quantile(test$nCount_RNA, prob = c(0.01))
+}
+countHIGH <- quantile(test$nCount_RNA, prob = 0.99)
+featureHIGH <- quantile(test$nFeature_RNA, prob = 0.99)
+featureLOW <- quantile(test$nFeature_RNA, prob = 0.01)
 
 
+test <- subset(test, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW & nCount_RNA < countHIGH & percent.mt < 25) %>% 
+  SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% 
+  RunPCA(assay = "SCT") %>% 
+  FindNeighbors(dims = 1:30)
 ```
 
 In the script below we created a loop that test all values for resolution in a certain range. It also plots the resulting umaps and storage both the Seurat Objects and plots generated in two different lists (output_list and plot_list). We tested the resolution in a range between 0.4 - 1.2 as the Seurat teams indicates that is suitable for a dataset of up to 3k cells.
