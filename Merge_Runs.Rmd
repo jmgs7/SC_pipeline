@@ -1,0 +1,327 @@
+---
+title: "Merge Runs Analysis"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries, include = FALSE}
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(sctransform)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(ggrepel)
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(parallel) # detectCores()
+library(future) # Allows parallelization in Seurat.
+library(readODS) # Allows ods file import to add sample info
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = detectCores())
+```
+
+```{r get_runs}
+
+run_dirs <- list.dirs("../Data",recursive = FALSE)
+run_dirs <- run_dirs[grepl("run",run_dirs)]
+
+rds_objects <- lapply(run_dirs, function(x){
+  rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T)
+  if (length(rds_file) > 0){
+    rds_object <- readRDS(rds_file)
+    rds_object@meta.data$orig.ident <- basename(x)
+    return(rds_object)
+  } else{
+    return(NULL)
+  }
+})
+
+rds_objects[sapply(rds_objects, is.null)] <- NULL
+```
+
+```{r merge_runs, fig.height=6, fig.width=10}
+merge_seurat_object <- Reduce(function(x,y) merge(x,y,add.cell.ids = c(x@project.name,y@project.name)) , rds_objects)
+
+# check that the size is correct
+
+for (rds_object in rds_objects){
+  print(dim(rds_object))
+}
+
+print(dim(merge_seurat_object))
+
+# remove run objects
+rm(rds_object, rds_objects, run_dirs)
+
+# launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
+merge_seurat_object <- SCTransform(merge_seurat_object, vst.flavor = "v2", vars.to.regress = c("percent.mt","orig.ident"))
+merge_seurat_object <- RunPCA(merge_seurat_object, assay = "SCT")
+
+Idents(merge_seurat_object) <- "orig.ident"
+
+DimPlot(merge_seurat_object, reduction = "pca") # Looks good!. There is no batch effects between runs!
+
+ElbowPlot(merge_seurat_object, ndims = 50) # choose 30
+```
+
+```{r PCA_heatmap, fig.height=15, fig.width=10}
+DimHeatmap(merge_seurat_object, dims = 1:30, balanced = TRUE)
+```
+
+```{r PCA_top_features, fig.height=30, fig.width=15}
+VizDimLoadings(merge_seurat_object, dims = 1:30, reduction = "pca")
+```
+
+```{r var_features, fig.height=6, fig.width=10}
+merge_seurat_object <- FindVariableFeatures(merge_seurat_object, selection.method = "vst", nfeatures = 1000)
+
+# Genes with differencial expression in different cells are good candidates to be biomarkers.
+# Identify the 10 most highly variable genes
+top <- head(VariableFeatures(merge_seurat_object), 20)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(merge_seurat_object)
+plot2 <- LabelPoints(plot = plot1, points = top, repel = TRUE)
+plot2
+```
+
+```{r clustering}
+# Resolution fine-tuned in a separate Rmd.
+merge_seurat_object <- FindNeighbors(merge_seurat_object, dims = 1:30)
+merge_seurat_object <- FindClusters(merge_seurat_object, resolution = 0.8) # Default resolution = 0.8
+merge_seurat_object <- RunUMAP(merge_seurat_object, dims = 1:30)
+```
+
+```{r cluster_visualization, fig.height=6, fig.width=10}
+DimPlot(merge_seurat_object, reduction = "umap", label = TRUE) # 26 clusters
+```
+
+```{r cluster_QC, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(merge_seurat_object, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(merge_seurat_object, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(merge_seurat_object, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(merge_seurat_object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + NoLegend() + plot2 + NoLegend()
+```
+
+```{r annotation}
+# Using celldex and SingleR packages.
+# Download reference data from celldex.
+reference <- HumanPrimaryCellAtlasData()
+
+# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
+merged.SCexp <- as.SingleCellExperiment(merge_seurat_object)
+
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+
+merge_seurat_object[["cell.labels"]] <- SingleR.annotation$labels
+```
+
+```{r annotation_vis, fig.height=6, fig.width=10}
+DimPlot(merge_seurat_object, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+```{r cluster_annotation}
+# Obtaining a vector containing the cluster of each cell in order.
+
+# Get the factor contained in the SeuratObject with all this information.
+clusters <- merge_seurat_object@meta.data[["seurat_clusters"]]
+
+# The cluster information for each cell is contain as a factor which levels coincide with the total number of clusters found by FindClusters(). An approach to transform this factor into a character vector is the following:
+# Obtain the list of clusters with levels(clusters). This outputs a character vector containing the levles of the factor. After that, we use the factor itself as an index to access the levels vector. When using a factor as an index, R does not use the labels itself (which in this case are string, so if used as indexes would cause an error), but the internal numeric index the factor contains. That way, for each cluster label assosiated with a cell in the factor, we access its numeric index and map it to the levels vectors (which coincides), thus obteinin each cell label as an unique character value. Each cell label is then storage as a character (the as.character is added as a control method since SingleR only admits strings as labels) in a vector. The vector contains the cluster label for each cell as a character value in the same order as each cell appears in the dataset, so the by-cluster annotation doesn't assing the cells to an incorrect cluster.
+clusters <- as.character(levels(clusters)[clusters])
+
+reference <- HumanPrimaryCellAtlasData()
+
+merged.SCexp <- as.SingleCellExperiment(merge_seurat_object)
+
+# We input the cluster vector using the clusters parameter.
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+
+merge_seurat_object[["cluster.labels"]] <- SingleR.annotation$labels
+```
+
+```{r annotation_vis, fig.height=6, fig.width=10}
+DimPlot(merge_seurat_object, reduction = "umap", group.by = "cluster.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+```{r set_ids}
+# We composite the cluster name. That way when 2 clusters name are the same Seurat doesn't merge the labels.
+
+# Get clusters levels accessing the SeuratObject variable as a df and then accessing the df as a column.
+cluster_number <- levels(merge_seurat_object[["seurat_clusters"]][1, ])
+
+# Get annotation labels.
+cluster_annotation <- SingleR.annotation$labels
+
+# Since cluster levels and labels are in the same order, we composite the new names using paste0 (sort of equivalent to fstrings in python).
+new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
+
+# Add names to each value of the clusters id vector so Seurat can take it as a valid input for RenameIdents.
+names(new.clusters.ids) <- levels(merge_seurat_object)
+merge_seurat_object <- RenameIdents(merge_seurat_object, new.clusters.ids)
+merge_seurat_object[["cell.cluster.labels"]] <- Idents(merge_seurat_object)
+```
+
+```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+DimPlot(merge_seurat_object, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+EXPLORATORY ANALYSIS
+
+Enriched cell in different condition?
+
+```{r boxplot, fig.height=40, fig.width=10}
+
+prop_cell_by_sample <- merge_seurat_object@meta.data %>% group_by(Sample_Name, cell.cluster.labels) %>%
+  summarise(n = n()) %>% ungroup() %>% group_by(Sample_Name) %>%
+  mutate(freq = n / sum(n)) %>%
+  left_join(merge_seurat_object@meta.data %>% select(Sample_Name, Sample_Group) %>% unique())
+
+ggplot(prop_cell_by_sample, aes(x = Sample_Group, y = freq))+
+  facet_wrap(~cell.cluster.labels, scales = "free", nrow = 12)+
+  geom_boxplot(aes(fill = Sample_Group), outlier.shape = NA, alpha = 0.5)+
+  geom_jitter(aes(color = Sample_Group)) +
+  theme_minimal()+
+  theme(legend.position = "none")
+```
+
+```{r boxplot, fig.height=40, fig.width=10}
+prop_cell_by_sample <- merge_seurat_object@meta.data %>%
+  group_by(Sample_Name, cell.cluster.labels) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  group_by(Sample_Name) %>%
+  mutate(freq = n / sum(n)) %>%
+  left_join(merge_seurat_object@meta.data %>%
+              select(Sample_Name, Sample_Group) %>%
+              unique())
+
+# Filter only the desired groups "N" and "T"
+prop_cell_by_sample_filtered <- prop_cell_by_sample %>%
+  filter(Sample_Group %in% c("N", "T"))
+
+# Plot only the desired groups
+ggplot(prop_cell_by_sample_filtered, aes(x = Sample_Group, y = freq)) +
+  facet_wrap(~cell.cluster.labels, scales = "free", nrow = 12) +
+  geom_boxplot(aes(fill = Sample_Group), outlier.shape = NA, alpha = 0.5) +
+  geom_jitter(aes(color = Sample_Group)) +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+```{r boxplot, fig.height=20, fig.width=15}
+
+# Plot only the desired groups
+enriched_clusters <- ggboxplot(prop_cell_by_sample_filtered, x = "Sample_Group", y = "freq",
+          color = "Sample_Group",  palette = "jco",
+          add = "jitter") +
+facet_wrap(~cell.cluster.labels, scales = "free", nrow = 6) +
+theme(legend.position = "none") +
+xlab("Sample Group") + ylab("Frequency") +
+stat_compare_means(aes(label = ..p.signif..), label.x = 1.5)
+
+enriched_clusters
+```
+
+```{r}
+
+# Assuming your data frame is named prop_cell_by_sample
+# and you want to compare Sample_Group "t" with other groups in each cluster
+
+# Extract data for Sample_Group "t" and other groups
+group_T <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "T", ]
+group_N <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "N", ]
+
+# Perform t-test for each cluster
+clusters <- levels(prop_cell_by_sample$cell.cluster.labels)
+p_values <- numeric(length(clusters))
+
+for (i in seq_along(clusters)) {
+  cluster_data_T <- group_T[group_T$cell.cluster.labels == clusters[i], "freq"]
+  cluster_data_N <- group_N[group_N$cell.cluster.labels == clusters[i], "freq"]
+  
+  # Perform t-test
+  t_test_result <- wilcox.test(cluster_data_T$freq, cluster_data_N$freq)
+  
+  # Store p-value
+  p_values[i] <- t_test_result$p.value
+}
+
+# Identify clusters with significant enrichment (e.g., p-value < 0.05)
+enriched_clusters <- clusters[p_values < 0.05]
+
+# Print or visualize the enriched clusters
+print(enriched_clusters)
+print(p_values)
+
+```
+
+```{r}
+cluster18.markers <- FindMarkers(merge_seurat_object, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-Endothelial_cells")
+```
+
+
+```{r fig.height=6, fig.width=10}
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)<br /><br /><br />
+cluster18.markers$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
+cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC > 0.6 & cluster18.markers$p_val < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC < -0.6 & cluster18.markers$p_val < 0.05] <- "DOWN"
+
+cluster18.markers <- cluster18.markers %>%
+  arrange(p_val) %>%
+  mutate(gene_symbol = rownames(.)) %>%
+  group_by(diffexpressed) %>%
+  mutate(delabel = if_else(diffexpressed %in% c("UP", "DOWN") & row_number() <= 10, gene_symbol, NA)) %>%
+  ungroup()
+
+ggplot(cluster18.markers, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), # to set the colours of our variable
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + # to set the labels in case we want to overwrite the categories from the dataframe (UP, DOWN, NO)
+  labs(color = NULL, #legend_title,
+       x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(-10, 10, 2)) + # to customise the breaks in the x axis
+  geom_text_repel(box.padding = 0.6, max.overlaps = Inf) # To show all labels
+```
+

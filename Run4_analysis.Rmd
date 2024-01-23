@@ -1,5 +1,5 @@
 ---
-title: "Run1_analysis"
+title: "run4_analysis"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
 output: html_document
@@ -31,9 +31,9 @@ knitr::opts_chunk$set(
 )
 ```
 
-# SC_Prostate_Run_1 analysis.
+# SC_Prostate_Run_4 analysis.
 
-Analysis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering. An analysis using the Seurat package (<https://satijalab.org/seurat/>) was done by the CSIC staff using the seven bridges platform, but an obsolete normalization method was used. This R markdown file describes a preliminary analysis for the first of the four runs the project contains.
+Analyiis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering.
 
 ```{r libraries, include = FALSE}
 library(Seurat)
@@ -53,54 +53,21 @@ plan("multicore", workers = detectCores())
 
 ## 1. Import data and exploratory analysis.
 
-Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada).
-
-These data contains raw counts and a previously normalized dataset. Nevertheless, we re-run the normalization using the new SCTransform method.
-
-```{r import_data}
-run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
-run1 # Show information about the Seurat object.
+```{r import_raw_data}
+run4.raw <- readRDS("~/Documents/SC_Prostate/Data/run4/C4_expected.rds")
+run4.raw
 ```
-
-```{r}
-rm(run1)
-```
-
-Data from run1 contained 3809 cells originally . After eliminating cells tagged (they are label at `run1@metadata[["Sample_Tag"]])`\` as "undetermined" (no UMIs) or "multiplet" (droplets with more than 1 cell), 3118 cells remained. Next, 3 criteria was followed in order to filter the cells:
-
--   Cells with less than 7846.18 genes.
-
--   Cells with more than 91.585 genes.
-
--   Cells with a percentage of mitochondrial genes lower than 25%.
-
-After those filters, the 2151 cells reported by the command above remained.
-
-Problem is, apart from the fact the use of float values for the number of genes is sort of confusing, we don't have any kind of information about the methodology followed to obtain these values.
-
-By using our own data-driven method (removal of the top and bottom 1% percentiles of cells by their number of genes and cells with more than 25% of mitochondrial genes) we obtain very close results, with 2135 cells kept after the filtering.
-
-Nevertheless, as the raw count matrix provided is lacking some essential information such as the cells' sample and group, is not possible to follow this approach and we depend on the CSIC staff's pre-analysed data.
-
-It is necessary to either obtain the correct count matrix or elucidate how the previous data processing was performed.
-
-UPDATE: Since we know how to introduced the missing information into the raw matrix, we will use our own analysis form now on.
 
 ## 2. QC.
 
 We will use the raw data in order to visualize QC parameters.
 
-```{r import_raw_data}
-run1.raw <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat.rds")
-run1.raw
-```
-
 ### 2.1. Mitochondrial gene percentage calculation.
 
 ```{r mito_genes}
-run1.raw[["percent.mt"]] <- PercentageFeatureSet(run1.raw, pattern = "^MT-")
+run4.raw[["percent.mt"]] <- PercentageFeatureSet(run4.raw, pattern = "^MT-")
 
-run1.raw[["percent.mt"]][1:5, ]
+run4.raw[["percent.mt"]][1:5, ]
 ```
 
 ### 2.2. QC visualization.
@@ -113,17 +80,17 @@ The plotting of the % mitochondrial genes against read count shows a very disper
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
-VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(run4.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
 # Zoom in on nFeature_RNA violin plot.
-VlnPlot(run1.raw, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+VlnPlot(run4.raw, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
 
 # Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+VlnPlot(run4.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
-plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 <- FeatureScatter(run4.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(run4.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 plot1 + plot2
 ```
 
@@ -133,29 +100,25 @@ plot1 + plot2
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
-We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we preffer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
-
-UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
-
 ```{r filtering_percentiles}
 # Remove Undetermined and multiplets.
-run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
+run4.subset <- subset(run4.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
 
 # Filter the 1% top and bottom percentiles.
 minCov <- 1000 # if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good.
-if (min(run1.subset$nCount_RNA) >= minCov) {
-  countLOW <- min(run1.subset$nCount_RNA)
+if (min(run4.subset$nCount_RNA) >= minCov) {
+  countLOW <- min(run4.subset$nCount_RNA)
 } else {
-  countLOW <- quantile(run1.subset$nCount_RNA, prob = c(0.01))
+  countLOW <- quantile(run4.subset$nCount_RNA, prob = c(0.01))
 }
-countHIGH <- quantile(run1.subset$nCount_RNA, prob = 0.99)
-featureHIGH <- quantile(run1.subset$nFeature_RNA, prob = 0.99)
-featureLOW <- quantile(run1.subset$nFeature_RNA, prob = 0.01)
+countHIGH <- quantile(run4.subset$nCount_RNA, prob = 0.99)
+featureHIGH <- quantile(run4.subset$nFeature_RNA, prob = 0.99)
+featureLOW <- quantile(run4.subset$nFeature_RNA, prob = 0.01)
 
 # subset
-run1.subset <- subset(run1.subset, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW & nCount_RNA < countHIGH & percent.mt < 25)
+run4.subset <- subset(run4.subset, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW & nCount_RNA < countHIGH & percent.mt < 25)
 
-run1.subset
+run4.subset
 ```
 
 ### 2.4. Adding sample names and sample groups.
@@ -166,27 +129,27 @@ run1.subset
 excel_data <- read_ods("~/Documents/SC_Prostate/Data/sample_info.ods")
 
 # Specify the experiment you want to extract information for
-target_run <- "run1"
+target_run <- "run4"
 
 # Filter Excel data for the specific experiment
 filtered_excel_data <- excel_data %>%
   filter(Run == target_run)
 
 # Extract the numeric part from Sample Tag and convert it to integer
-run1.subset$Sample_Tag_Number <- as.integer(gsub("\\D", "", run1.subset$Sample_Tag))
+run4.subset$Sample_Tag_Number <- as.integer(gsub("\\D", "", run4.subset$Sample_Tag))
 
 # Extract Sample Name and Sample Group based on Sample Tag information
-run1.subset$Sample_Name <- filtered_excel_data$Sample_Name[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+run4.subset$Sample_Name <- filtered_excel_data$Sample_Name[match(run4.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
 
-run1.subset$Sample_Group <- filtered_excel_data$Sample_Group[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+run4.subset$Sample_Group <- filtered_excel_data$Sample_Group[match(run4.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
 
-run1.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+run4.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run4.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
 ```
 
 ```{r saving_filtered_data, include = FALSE, echo = FALSE}
 
 # Save filtered file for data merging.
-saveRDS(run1.subset, file = "~/Documents/SC_Prostate/Data/run1/run1_filtered.rds")
+saveRDS(run4.subset, file = "~/Documents/SC_Prostate/Data/run4/run4_filtered.rds")
 ```
 
 ### 2.5. Normalization using SCTransform.
@@ -197,7 +160,7 @@ The vars.to.regress parameter allows to regress out certain variables, preventin
 
 ```{r SCTransform}
 
-run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
+run4.subset <- SCTransform(run4.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
 ```
 
 ### 2.6. Visualizing QC parameters after normalization.
@@ -208,14 +171,14 @@ Another thing that don't make sense is the long upper tails of the features and 
 
 ```{r QC_norm, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
-VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(run4.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
 # Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
+VlnPlot(run4.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
-plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 <- FeatureScatter(run4.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(run4.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 plot1 + plot2
 ```
 
@@ -224,52 +187,54 @@ plot1 + plot2
 ```{r PCA, fig.height=6, fig.width=10}
 
 # Run PCA on the SCT-normalyzed data.
-run1.subset <- RunPCA(run1.subset, assay = "SCT") # features = VariableFeatures(object = run1.subset))
+run4.subset <- RunPCA(run4.subset, assay = "SCT") # features = VariableFeatures(object = run4.subset))
 
-DimPlot(run1.subset, reduction = "pca") + NoLegend() # An unique PCA is not enough to separate cell groups.
+DimPlot(run4.subset, reduction = "pca") + NoLegend() # An unique PCA is not enough to separate cell groups.
 
-ElbowPlot(run1.subset, ndims = 50)
+ElbowPlot(run4.subset, ndims = 50)
 ```
 
-In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
+In normal circumstances, a selection of the first 10 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
 
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
-DimHeatmap(run1.subset, dims = 1:30, balanced = TRUE)
+DimHeatmap(run4.subset, dims = 1:30, balanced = TRUE)
 ```
 
 ```{r PCA_top_features, fig.height=30, fig.width=15}
-VizDimLoadings(run1.subset, dims = 1:30, reduction = "pca")
+VizDimLoadings(run4.subset, dims = 1:30, reduction = "pca")
 ```
 
-## 5. Clustering
+## 5. Clustering.
+
+### 5.1. Cluster computation.
 
 ```{r clustering}
 # Resolution fine-tuned in a separate Rmd.
-run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
-run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
-run1.subset <- RunUMAP(run1.subset, dims = 1:30)
+run4.subset <- FindNeighbors(run4.subset, dims = 1:30)
+run4.subset <- FindClusters(run4.subset, resolution = 0.8) # Default resolution = 0.8
+run4.subset <- RunUMAP(run4.subset, dims = 1:30)
 ```
 
 ```{r cluster_visualization, fig.height=6, fig.width=10}
-DimPlot(run1.subset, reduction = "umap", label = TRUE)
+DimPlot(run4.subset, reduction = "umap", label = TRUE)
 ```
 
-Cluster QC.
+### 5.2. Cluster QC.
 
-As we can observe, the data structure is conditioned by the abundant presence of mitochondrial DNA. Taking into account the 2 clusters with less % of mitochondrial DNA, clusters 14 and 15, we appreciate how the lower content in mitochondrial material correlates with lower feature and read counts. On the other hand, if we compare the distritrubution of mitoDNA of each cluster with the feature and count distribution, we can see a clear similarity.
+As we can observe, the data structure is conditioned by the abundant presence of mitochondrial DNA. Taking into account the cluster with less % of mitochondrial DNA, cluster 17, we appreciate how the lower content in mitochondrial material correlates with lower feature and read counts. On the other hand, if we compare the distritrubution of mitoDNA of each cluster with the feature and count distribution, we can see a clear similarity.
 
 Thus, mitochondrial DNA is shaping the data, and probably conditioning the cell annotation and further analysis.
 
 ```{r cluster_QC, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
-VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+VlnPlot(run4.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
 
 # Zoom in on nFeature_RNA violin plot.
-VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+VlnPlot(run4.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
-plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 <- FeatureScatter(run4.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(run4.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
@@ -285,22 +250,22 @@ SingleR.annotation uses the logcounts provided in the count matrix of the Single
 reference <- HumanPrimaryCellAtlasData()
 
 # Convert Seurat object into a SingleCellExperiment Object for SingleR input.
-run1.SCexp <- as.SingleCellExperiment(run1.subset)
+run4.SCexp <- as.SingleCellExperiment(run4.subset)
 
 # Anotate using raw counts.
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run4.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
 
-run1.subset[["cell.labels"]] <- SingleR.annotation$labels
+run4.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
 
 ```{r annotation_vis, fig.height=6, fig.width=10}
-DimPlot(run1.subset, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+DimPlot(run4.subset, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
 You can also obtain the anotation on a cluster-by-cluster method based rather than a cell-by-cell one. By cluster annotation:
 
 ```{r}
-clusters <- run1.subset@meta.data[["seurat_clusters"]]
+clusters <- run4.subset@meta.data[["seurat_clusters"]]
 clusters <- as.character(levels(clusters)[clusters])
 ```
 
@@ -308,7 +273,7 @@ clusters <- as.character(levels(clusters)[clusters])
 # Obtaining a vector containing the cluster of each cell in order.
 
 # Get the factor contained in the SeuratObject with all this information.
-clusters <- run1.subset@meta.data[["seurat_clusters"]]
+clusters <- run4.subset@meta.data[["seurat_clusters"]]
 
 # The cluster information for each cell is contain as a factor which levels coincide with the total number of clusters found by FindClusters(). An approach to transform this factor into a character vector is the following:
 # Obtain the list of clusters with levels(clusters). This outputs a character vector containing the levles of the factor. After that, we use the factor itself as an index to access the levels vector. When using a factor as an index, R does not use the labels itself (which in this case are string, so if used as indexes would cause an error), but the internal numeric index the factor contains. That way, for each cluster label assosiated with a cell in the factor, we access its numeric index and map it to the levels vectors (which coincides), thus obteinin each cell label as an unique character value. Each cell label is then storage as a character (the as.character is added as a control method since SingleR only admits strings as labels) in a vector. The vector contains the cluster label for each cell as a character value in the same order as each cell appears in the dataset, so the by-cluster annotation doesn't assing the cells to an incorrect cluster.
@@ -316,19 +281,19 @@ clusters <- as.character(levels(clusters)[clusters])
 
 # reference <- HumanPrimaryCellAtlasData()
 
-run1.SCexp <- as.SingleCellExperiment(run1.subset)
+run4.SCexp <- as.SingleCellExperiment(run4.subset)
 
 # We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run4.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
-run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
+run4.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```
 
 ```{r set_ids}
 # We composite the cluster name. That way when 2 clusters name are the same Seurat doesn't merge the labels.
 
 # Get clusters levels accesing the SeuratObject variable as a df and then accesing the df as a column.
-cluster_number <- levels(run1.subset[["seurat_clusters"]][1, ])
+cluster_number <- levels(run4.subset[["seurat_clusters"]][1, ])
 
 # Get annotation labels.
 cluster_annotation <- SingleR.annotation$labels
@@ -337,16 +302,16 @@ cluster_annotation <- SingleR.annotation$labels
 new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
 
 # Add names to each value of the clusters id vector so Seurat can take it as a valid input for RenameIdents.
-names(new.clusters.ids) <- levels(run1.subset)
-run1.subset <- RenameIdents(run1.subset, new.clusters.ids)
+names(new.clusters.ids) <- levels(run4.subset)
+run4.subset <- RenameIdents(run4.subset, new.clusters.ids)
 ```
 
 ```{r cluster_annotation_vis, fig.height=6, fig.width=10}
-DimPlot(run1.subset, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+DimPlot(run4.subset, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
 ```{r saving_data, include = FALSE, echo = FALSE}
 
-# Save filtered file for data merging.
-saveRDS(run1.subset, file = "~/Documents/SC_Prostate/Output/run1/run1_processed.rds")
+# Save fully-proccesed data.
+saveRDS(run4.subset, file = "~/Documents/SC_Prostate/Output/run4/run4_processed.rds")
 ```

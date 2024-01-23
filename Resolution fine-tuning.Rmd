@@ -61,6 +61,49 @@ plan("multicore", workers = detectCores())
 
 Load the data and apply the basic pipeline in one line.
 
+A. MERGED RUNS
+
+```{r get_runs}
+
+run_dirs <- list.dirs("../Data",recursive = FALSE)
+run_dirs <- run_dirs[grepl("run",run_dirs)]
+
+rds_objects <- lapply(run_dirs, function(x){
+  rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T)
+  if (length(rds_file) > 0){
+    rds_object <- readRDS(rds_file)
+    rds_object@meta.data$orig.ident <- basename(x)
+    return(rds_object)
+  } else{
+    return(NULL)
+  }
+})
+
+rds_objects[sapply(rds_objects, is.null)] <- NULL
+
+test <- Reduce(function(x,y) merge(x,y,add.cell.ids = c(x@project.name,y@project.name)) , rds_objects)
+
+# check that the size is correct
+
+for (rds_object in rds_objects){
+  print(dim(rds_object))
+}
+
+print(dim(test)) # Merged object should have 13420 cells.
+
+# remove run objects
+rm(rds_object, rds_objects, run_dirs)
+
+# launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
+
+test <- 
+  SCTransform(test, vst.flavor = "v2", vars.to.regress = c("percent.mt","orig.ident")) %>% 
+  RunPCA(assay = "SCT") %>% 
+  FindNeighbors(dims = 1:30)
+```
+
+B. SINGLE FILE.
+
 ```{r previous_steps}
 
 rm(test)
@@ -81,7 +124,7 @@ featureHIGH <- quantile(test$nFeature_RNA, prob = 0.99)
 featureLOW <- quantile(test$nFeature_RNA, prob = 0.01)
 
 
-test <- subset(test, subset = nFeature_RNA > featureLOW & nFeature_RNA < featureHIGH & nCount_RNA > countLOW & nCount_RNA < countHIGH & percent.mt < 25) %>% 
+test <- 
   SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% 
   RunPCA(assay = "SCT") %>% 
   FindNeighbors(dims = 1:30)
@@ -89,7 +132,7 @@ test <- subset(test, subset = nFeature_RNA > featureLOW & nFeature_RNA < feature
 
 In the script below we created a loop that test all values for resolution in a certain range. It also plots the resulting umaps and storage both the Seurat Objects and plots generated in two different lists (output_list and plot_list). We tested the resolution in a range between 0.4 - 1.2 as the Seurat teams indicates that is suitable for a dataset of up to 3k cells.
 
-```{r}
+```{r optimization}
 
 # Set the range of values with an increment of 0.1
 start_value <- 0.1
