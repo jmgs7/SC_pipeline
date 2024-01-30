@@ -94,10 +94,8 @@ Particularization is extremely expensive as we need to run the inference process
 
 ```{bash engine.opts='-l'}
 
-# # Run CellBender.
 # ~/anaconda3/envs/cellbender/bin/cellbender remove-background --input "../Data/run1/run1_raw.h5" --output "../Data/run1/run1_raw_clean.h5"
 
-# # Transform the .h5 file output to a file compatible with Seurat.
 # ~/anaconda3/envs/cellbender/bin/ptrepack --complevel 5 "../Data/run1/run1_clean.h5":/matrix "../Data/run1/run1_clean_seurat.h5":/matrix
 ```
 
@@ -162,7 +160,6 @@ plot1 + plot2
 # Remove Undetermined and multiplets.
 run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Name != "Multiplet")
 
-# Filter the 1% top and bottom percentiles.
 minCov=1000 #if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good. 
   if(min(run1.subset$nCount_RNA)>=minCov){
     countLOW=min(run1.subset$nCount_RNA)
@@ -272,8 +269,6 @@ DimPlot(run1.subset, reduction = 'pca') + NoLegend() # An unique PCA is not enou
 ElbowPlot(run1.subset, ndims = 50)
 ```
 
-In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
-
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
 
 DimHeatmap(run1.subset, dims = 1:30, balanced = TRUE)
@@ -287,10 +282,8 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = 'pca')
 ## 5. Clustering
 
 ```{r clustering}
-
-# Resolution fine-tuned in a separate Rmd.
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
-run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
+run1.subset <- FindClusters(run1.subset, resolution = 1.2) # Default resolution = 0.8
 run1.subset <- RunUMAP(run1.subset, dims = 1:30)
 ```
 
@@ -324,19 +317,13 @@ saveRDS(run1, file = "../Output/Run1_raw.rds")
 
 Cell annotation is performed using the Human Cell Atlas as reference.
 
-SingleR.annotation uses the logcounts provided in the count matrix of the SingleCellExperiment object by default. Nevertheless, after applying SCTransform, counts and logcounts are both the normalized counts (so both values are the same).
-
 ```{r annotation}
 
-# Using celldex and SingleR packages.
-# Download reference data from celldex.
 reference <- HumanPrimaryCellAtlasData()
 
-# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
 run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
 
-# Anotate using raw counts. 
-SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, num.threads = detectCores())
 
 run1.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -346,49 +333,26 @@ run1.subset[["cell.labels"]] <- SingleR.annotation$labels
 DimPlot(run1.subset, reduction = 'umap', group.by = 'cell.labels', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
-You can also obtain the anotation on a cluster-by-cluster method based rather than a cell-by-cell one. By cluster annotation:
-
-```{r}
-
-clusters <- run1.subset@meta.data[["seurat_clusters"]]
-clusters <- as.character(levels(clusters)[clusters])
-```
+By cluster annotation:
 
 ```{r cluster_annotation}
 
-# Obtaining a vector containing the cluster of each cell in order.
-
-# Get the factor contained in the SeuratObject with all this information.
 clusters <- run1.subset@meta.data[["seurat_clusters"]]
-
-# The cluster information for each cell is contain as a factor which levels coincide with the total number of clusters found by FindClusters(). An approach to transform this factor into a character vector is the following:
-# Obtain the list of clusters with levels(clusters). This outputs a character vector containing the levles of the factor. After that, we use the factor itself as an index to access the levels vector. When using a factor as an index, R does not use the labels itself (which in this case are string, so if used as indexes would cause an error), but the internal numeric index the factor contains. That way, for each cluster label assosiated with a cell in the factor, we access its numeric index and map it to the levels vectors (which coincides), thus obteinin each cell label as an unique character value. Each cell label is then storage as a character (the as.character is added as a control method since SingleR only admits strings as labels) in a vector. The vector contains the cluster label for each cell as a character value in the same order as each cell appears in the dataset, so the by-cluster annotation doesn't assing the cells to an incorrect cluster.
 clusters <- as.character(levels(clusters)[clusters])
+
 
 # reference <- HumanPrimaryCellAtlasData()
 
 run1.subset.SCexp <- as.SingleCellExperiment(run1.subset)
 
-# We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.subset.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
 run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```
 
 ```{r set_ids}
 
-# We composite the cluster name. That way when 2 clusters name are the same Seurat doesn't merge the labels. 
-
-# Get clusters levels accesing the SeuratObject variable as a df and then accesing the df as a column.
-cluster_number <- levels(run1.subset[["seurat_clusters"]][1,])
-
-# Get annotation labels.
-cluster_annotation <- SingleR.annotation$labels
-
-# Since cluster levels and labels are in the same order, we composite the new names using paste0 (sort of equivalent to fstrings in python).
-new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
-
-# Add names to each value of the clusters id vector so Seurat can take it as a valid input for RenameIdents.
+new.clusters.ids <- SingleR.annotation$labels
 names(new.clusters.ids) <- levels(run1.subset)
 run1.subset <- RenameIdents(run1.subset, new.clusters.ids)
 ```
@@ -402,7 +366,7 @@ DimPlot(run1.subset, reduction = 'umap', label = TRUE, repel = TRUE, label.size 
 
 ```{r oneliner, fig.height=6, fig.width=10}
 
-run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% FindClusters(resolution = 0.8) %>% RunUMAP(dims = 1:30)
+run1 <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30) %>% FindClusters(resolution = 1.2) %>% RunUMAP(dims = 1:30)
 ```
 
 ```{r  oneliner_clusters, fig.height=6, fig.width=10}
@@ -435,7 +399,7 @@ ElbowPlot(run1, ndims = 50)
 
 run1.SCexp <- as.SingleCellExperiment(run1)
 
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = 'logcounts', labels = reference$label.main, num.threads = detectCores()) 
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = 'counts', labels = reference$label.main, num.threads = detectCores()) 
 
 run1[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -453,30 +417,19 @@ clusters <- as.character(levels(clusters)[clusters])
 
 run1.SCexp <- as.SingleCellExperiment(run1)
 
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test='logcounts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test='counts', labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
 run1[["cluster.labels"]] <- SingleR.annotation$labels
 
 ```
 
 ```{r pre_cluster_ids}
-
-cluster_number <- levels(run1[["seurat_clusters"]][1,])
-cluster_annotation <- SingleR.annotation$labels
-
-new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
-names(new.clusters.ids) <- levels(run1)
+new.clusters.ids <- SingleR.annotation$labels
+names(new.clusters.ids) <- levels(run1) 
 run1 <- RenameIdents(run1, new.clusters.ids)
 ```
 
 ```{r pre_cluster_anno_vis, fig.height=6, fig.width=10}
 
 DimPlot(run1, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
-```
-
-```{r}
-
-plot <-  (DimPlot(run1, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3))))
-
-ggsave(filename = "../Output/images/example.jpg", height = 6, width = 10, plot = plot, quality = 50)
 ```

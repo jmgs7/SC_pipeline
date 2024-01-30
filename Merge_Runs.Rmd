@@ -295,7 +295,6 @@ print(p_values)
 cluster18.markers <- FindMarkers(merge_seurat_object, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-Endothelial_cells")
 ```
 
-
 ```{r fig.height=6, fig.width=10}
 
 # Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)<br /><br /><br />
@@ -324,4 +323,3 @@ ggplot(cluster18.markers, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpre
   scale_x_continuous(breaks = seq(-10, 10, 2)) + # to customise the breaks in the x axis
   geom_text_repel(box.padding = 0.6, max.overlaps = Inf) # To show all labels
 ```
-
