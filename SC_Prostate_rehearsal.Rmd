@@ -89,7 +89,7 @@ Export data to h5 format to use in CellBender.
 # write10xCounts("../Data/run1/run1_raw.h5", run1.raw@assays$RNA@counts)
 ```
 
-Call CellBender from system to remove background RNA (WARNING: Computationally expensive. Run in HPC server and enable the - - cuda option when possible)
+Call CellBender from system to remove background RNA (WARNING: Computationally expensive. Run in HPC server and enable the -- cuda option when possible)
 
 !! Problems: Need parameter adjusting. Data presents serious degradation and a high % of mitochondrial genes, so the deep learning algorithms implemented in CellBender caputures a large amount of counts as ambient RNA, causing a severe cell number reduction after filtering.
 

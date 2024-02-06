@@ -2,7 +2,7 @@
 title: "Merge Runs Analysis"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
-output: html_document
+output:
 ---
 
 ```{r setup, include=FALSE}
@@ -50,59 +50,108 @@ options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
 ```
 
+# 1. Load filtered run data.
+
+First, we search trough the project directory for each filtered raw data and load each SeuratObject.
+
 ```{r get_runs}
 
+# List the data directory.
 run_dirs <- list.dirs("../Data",recursive = FALSE)
+
+# Filter only the run folders.
+# Grepl stands for "logical grep" so it only outputs TRUE or FALSE. It accepts an array of strings as an input, search for teh given pattern and returns another array with TRUE or FALSE if the pattern matches with the string in that position of the array.
 run_dirs <- run_dirs[grepl("run",run_dirs)]
 
-rds_objects <- lapply(run_dirs, function(x){
-  rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T)
+# lapply stands for "list apply", and allows to apply a certain function over all elements of an array: lapply(X, FUN). You can apply an R-defined function or create you own as shown belox.
+rds_objects <- lapply(X = run_dirs, FUN = function(x){
+  rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T) # For each run directory list the filtered RDS object.
+  # If there is something in the directory list...
   if (length(rds_file) > 0){
-    rds_object <- readRDS(rds_file)
-    rds_object@meta.data$orig.ident <- basename(x)
-    return(rds_object)
+    rds_object <- readRDS(rds_file) # Load the RDS object in to a list.
+    rds_object@meta.data$orig.ident <- basename(x) # Add the original path in the metadata to keep track of data.
+    return(rds_object) # Return the list of RDS object and...
   } else{
-    return(NULL)
+    return(NULL) # If the directory list is empty return null.
   }
 })
 
-rds_objects[sapply(rds_objects, is.null)] <- NULL
+# sapply is similar to lapply but returns a vector of the same lenght instead of the same element as the input (i.e. lapply returns a list is input is a list, but sapply always returns a vector).
+rds_objects[sapply(rds_objects, is.null)] <- NULL # Filter emtpy objects.
+
 ```
 
+# 2. Merge Seurat Objects.
+
+We merge the 4 datasets into a unique Seurat Object. We confirm the merge by checking the total number off cells.
+
 ```{r merge_runs, fig.height=6, fig.width=10}
-merge_seurat_object <- Reduce(function(x,y) merge(x,y,add.cell.ids = c(x@project.name,y@project.name)) , rds_objects)
+
+# Reduce() allows to reduce a list of values into a single value by applying a binary opperation over then iteratively. That is, takes the first two elements of a list, x and y, apply a the function (fun(x,y)) creating the reduced value a, then takes the third element of the list, z, and apply the function to c and z: fun(c, z) and so on till the whole list is reduce to one single value. In this case, we apply Seruat's merge to merge all objects sequentially into one single SeuratObject for the whole data set. 
+# add.cell.ids = add the project name to each specific run to its cells.
+merge_seurat_object <- Reduce(function(x,y) merge(x,y, add.cell.ids = c(x@project.name,y@project.name)), rds_objects)
 
 # check that the size is correct
-
 for (rds_object in rds_objects){
   print(dim(rds_object))
 }
 
 print(dim(merge_seurat_object))
+```
+
+Removal of big variables used for data merging:
+
+```{r remove_objects, inlude=FALSE}
 
 # remove run objects
 rm(rds_object, rds_objects, run_dirs)
+```
+
+# 3. Normalize and check batch effect.
+
+Batch effect is considered the presence of certain unique characteristics within a specific dataset that make it differentiable from the rest when merging all the data. As we are merging data from different runs, variations in the samples processing and further cell manipulation and sequencing could induce those batch effect.
+
+Before the merge, we annotate the cell with its run of origin, so we can regress out that variable in the normalization process to minimize batch effect.
+
+PCA plotting of the first two PC shows that the different runs are not separated, thus they don't show batch effect.
+
+```{r batch_effect, fig.height=6, fig.width=10}
 
 # launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
-merge_seurat_object <- SCTransform(merge_seurat_object, vst.flavor = "v2", vars.to.regress = c("percent.mt","orig.ident"))
+merge_seurat_object <- SCTransform(merge_seurat_object, vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident"))
 merge_seurat_object <- RunPCA(merge_seurat_object, assay = "SCT")
 
+# Use origin run info to visualize batch effect.
 Idents(merge_seurat_object) <- "orig.ident"
 
 DimPlot(merge_seurat_object, reduction = "pca") # Looks good!. There is no batch effects between runs!
+```
+
+## 3.2. Set dimensionality.
+
+While the elbow happens around the 15th PC, we extend the included PCs upto the 30th following the new guidelines by the Seurat developers after SCTransform normalization implementation.
+
+```{r elbwol_plot, fig.height=6, fig.width=10}
 
 ElbowPlot(merge_seurat_object, ndims = 50) # choose 30
 ```
 
+The heatmap and the feature plot give us information about the significance and composition of each PC.
+
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
+
 DimHeatmap(merge_seurat_object, dims = 1:30, balanced = TRUE)
 ```
 
 ```{r PCA_top_features, fig.height=30, fig.width=15}
+
 VizDimLoadings(merge_seurat_object, dims = 1:30, reduction = "pca")
 ```
 
+# 4. Find variable top variable features.
+
 ```{r var_features, fig.height=6, fig.width=10}
+
 merge_seurat_object <- FindVariableFeatures(merge_seurat_object, selection.method = "vst", nfeatures = 1000)
 
 # Genes with differencial expression in different cells are good candidates to be biomarkers.
@@ -112,8 +161,12 @@ top <- head(VariableFeatures(merge_seurat_object), 20)
 # plot variable features with and without labels
 plot1 <- VariableFeaturePlot(merge_seurat_object)
 plot2 <- LabelPoints(plot = plot1, points = top, repel = TRUE)
-plot2
+plot1 + plot2
 ```
+
+# 4. Clustering.
+
+Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 0.8 as a appropriate value for clustering.
 
 ```{r clustering}
 # Resolution fine-tuned in a separate Rmd.
@@ -122,9 +175,15 @@ merge_seurat_object <- FindClusters(merge_seurat_object, resolution = 0.8) # Def
 merge_seurat_object <- RunUMAP(merge_seurat_object, dims = 1:30)
 ```
 
+We obtain 26 distinct clusters.
+
 ```{r cluster_visualization, fig.height=6, fig.width=10}
 DimPlot(merge_seurat_object, reduction = "umap", label = TRUE) # 26 clusters
 ```
+
+## 4.1. Cluster QC.
+
+Cluster QC shows homogeneous characteristics across the clusters with the exception of cluster 22 (abnormal low number of features). Despite what it might look like, this actually conforms and advantage, as if that specific group of cells give inconsistent results, because they have been isolated in their own cluster we can move forward just ignoring or removing it.
 
 ```{r cluster_QC, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
@@ -139,6 +198,12 @@ plot2 <- FeatureScatter(merge_seurat_object, feature1 = "nCount_RNA", feature2 =
 plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
+# 5. Annotation.
+
+## 5.1. By-cell annotation.
+
+Cell-by-cell annotation identifies 30 different cell types based on the HumanPrimaryCellAtlas, which distribution pretty much coincides with the cluster layout.
+
 ```{r annotation}
 # Using celldex and SingleR packages.
 # Download reference data from celldex.
@@ -152,9 +217,11 @@ SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.t
 merge_seurat_object[["cell.labels"]] <- SingleR.annotation$labels
 ```
 
-```{r annotation_vis, fig.height=6, fig.width=10}
+```{r annotation_vis_cell, fig.height=6, fig.width=10}
 DimPlot(merge_seurat_object, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
+
+## 5.2. By-cluster annotation.
 
 ```{r cluster_annotation}
 # Obtaining a vector containing the cluster of each cell in order.
@@ -202,16 +269,22 @@ merge_seurat_object[["cell.cluster.labels"]] <- Idents(merge_seurat_object)
 DimPlot(merge_seurat_object, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
-EXPLORATORY ANALYSIS
+# 6. EXPLORATORY ANALYSIS.
 
 Enriched cell in different condition?
 
-```{r boxplot, fig.height=40, fig.width=10}
+```{r T_enrichment_calc, fig.height=40, fig.width=10}
 
-prop_cell_by_sample <- merge_seurat_object@meta.data %>% group_by(Sample_Name, cell.cluster.labels) %>%
-  summarise(n = n()) %>% ungroup() %>% group_by(Sample_Name) %>%
-  mutate(freq = n / sum(n)) %>%
-  left_join(merge_seurat_object@meta.data %>% select(Sample_Name, Sample_Group) %>% unique())
+# Sumarize() performs an operation over a row of a dataframe, for example mean() or count n().
+
+# Slots are dataframes, so it can be used by dplyr.
+prop_cell_by_sample <- merge_seurat_object@meta.data %>% group_by(Sample_Name, cell.cluster.labels) %>% 
+  summarise(n = n()) %>% # For each cluster, group the cells from the same sample together and count them.
+  ungroup() %>% group_by(Sample_Name) %>%
+  mutate(freq = n / sum(n)) %>% # Group them now by sample, add up the total number of cells from that sample (regardless of the cluster they belong to). Then, divide each n value (number of cells of a sample in a certain cluster), obtaining which fraction of the total cells of that given type is present on each cluster.
+  left_join(merge_seurat_object@meta.data %>% select(Sample_Name, Sample_Group) %>% unique()) # Add metadata infor available for the data, select only the Sample_Name and Sample_Group fields and delete duplicates.
+
+# In the plotting, whe separate the data on each cluster by the Sample Group, so we represent the frequency of each sample (sample_name) belonging to a certain sample_group and we calculate the statistics using this grouping method.
 
 ggplot(prop_cell_by_sample, aes(x = Sample_Group, y = freq))+
   facet_wrap(~cell.cluster.labels, scales = "free", nrow = 12)+
@@ -222,15 +295,6 @@ ggplot(prop_cell_by_sample, aes(x = Sample_Group, y = freq))+
 ```
 
 ```{r boxplot, fig.height=40, fig.width=10}
-prop_cell_by_sample <- merge_seurat_object@meta.data %>%
-  group_by(Sample_Name, cell.cluster.labels) %>%
-  summarise(n = n()) %>%
-  ungroup() %>%
-  group_by(Sample_Name) %>%
-  mutate(freq = n / sum(n)) %>%
-  left_join(merge_seurat_object@meta.data %>%
-              select(Sample_Name, Sample_Group) %>%
-              unique())
 
 # Filter only the desired groups "N" and "T"
 prop_cell_by_sample_filtered <- prop_cell_by_sample %>%
@@ -244,7 +308,7 @@ ggplot(prop_cell_by_sample_filtered, aes(x = Sample_Group, y = freq)) +
   theme_minimal() + theme(legend.position = "none")
 ```
 
-```{r boxplot, fig.height=20, fig.width=15}
+```{r boxplot_publish, fig.height=20, fig.width=15}
 
 # Plot only the desired groups
 enriched_clusters <- ggboxplot(prop_cell_by_sample_filtered, x = "Sample_Group", y = "freq",
@@ -260,10 +324,7 @@ enriched_clusters
 
 ```{r}
 
-# Assuming your data frame is named prop_cell_by_sample
-# and you want to compare Sample_Group "t" with other groups in each cluster
-
-# Extract data for Sample_Group "t" and other groups
+# Extract data for Sample_Group "T" and other groups
 group_T <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "T", ]
 group_N <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "N", ]
 
@@ -293,16 +354,23 @@ print(p_values)
 
 ```{r}
 cluster18.markers <- FindMarkers(merge_seurat_object, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-Endothelial_cells")
+
+
 ```
 
 ```{r fig.height=6, fig.width=10}
 
-# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative)<br /><br /><br />
+FC = log2(1.5) # Set FC threshold.
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative).
 cluster18.markers$diffexpressed <- "NO"
-# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP"
-cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC > 0.6 & cluster18.markers$p_val < 0.05] <- "UP"
-# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
-cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC < -0.6 & cluster18.markers$p_val < 0.05] <- "DOWN"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP".
+cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC > FC & cluster18.markers$p_val < 0.05] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN".
+cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC < -FC & cluster18.markers$p_val < 0.05] <- "DOWN"
+
+# Save to csv.
+write.csv(cluster18.markers, "~/Documents/SC_Prostate/Output/diffexp_cluster18.csv", row.names = FALSE)
 
 cluster18.markers <- cluster18.markers %>%
   arrange(p_val) %>%
@@ -312,7 +380,7 @@ cluster18.markers <- cluster18.markers %>%
   ungroup()
 
 ggplot(cluster18.markers, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpressed, label = delabel)) +
-  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_vline(xintercept = c(-FC, FC), col = "gray", linetype = 'dashed') +
   geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
   geom_point(size = 2) +
   scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), # to set the colours of our variable
