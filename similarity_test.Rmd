@@ -1,5 +1,5 @@
 ---
-title: "similarity_test"
+title: "Similarity test of SC Prostate Data"
 author: "José Manuel Gómez Silva"
 date: "2024-02-08"
 output: html_document
@@ -48,11 +48,6 @@ To implement the similarity score method, we would calculate a score that quanti
 
 The cosine method creates a vector with the expression values of the cells, represents it on a inner product space, calculates the cosine of the angle between the vectors and takes it as a measure of their similarity.
 
-```{r load_raw_data}
-
-SCP_data_raw <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
-```
-
 ```{r load_processed_data}
 
 SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
@@ -80,12 +75,17 @@ This functions calculates the average expression vector for the specified refere
 
 The function returns a named vector with the similarity score for each cell/sample or the whole group for the specified target. If the selected mode is "all" it would get the similarity score for all the cells in the dataset.
 
+We also add the possibility to perform Pearson, Kendall or Spearman correlation tests with the method argument (default is cosine similarity)
+
 ```{r SC_similarity}
 
-SC_similarity <- function(seurat_object, mode, target, reference) {
+SC_similarity <- function(
+    seurat_object, mode, target, reference, method = "cosine"
+    ) {
   
   mode = tolower(mode)
   target = toupper(target)
+  method = tolower(method)
   
   # Calculate average expression of the reference group.
   ref_group <- subset(seurat_object, Sample_Group == reference)
@@ -100,18 +100,28 @@ SC_similarity <- function(seurat_object, mode, target, reference) {
     data_matrix <- GetAssayData(target_cells, assay = "SCT", slot = "scale.data")
 
   # Calculate similarity scores for all cells.
-    similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-      cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
-      })
-    
+  
+    if (method == "cosine") {
+  
+      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+        cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
+        })
+      
+    } else {
+      
+      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+        cor(cell_expression, ref_group_avg$SCT[,1], method = method)
+        })
+      
+    }
+
   }
   
   if (mode == "sample") {
     
-    target_cells <- subset(seurat_object, Sample_Group == target)
     similarity_scores = list()
     
-    # Loop over each unique sample name to calculate similarity scores.
+    # Loop over each unique sample name to calculate similarity scores
     for (sample in unique(target_cells$Sample_Name)) {
       
       # Subset Seurat object for cells from the current sample
@@ -121,9 +131,20 @@ SC_similarity <- function(seurat_object, mode, target, reference) {
       sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
       
       # Calculate cosine similarity with the T cell average expression
-      similarity_scores[sample] <- cosine_similarity(
-        sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1]
-        )
+      
+      if (method == "cosine") {
+        
+        similarity_scores[sample] <- cosine_similarity(
+          sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1]
+          )
+        
+      } else {
+        
+        similarity_scores[sample] <- cor(
+          sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1], method = method
+          )
+        
+      }
       
     }
     
@@ -131,15 +152,52 @@ SC_similarity <- function(seurat_object, mode, target, reference) {
     
   }
   
+  if (mode == "group") {
+    
+    similarity_scores = list()
+    
+    # Aggregate the expression data for the current sample
+    target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+    
+    if (method == "cosine") {
+      
+      # Calculate cosine similarity with the T cell average expression
+      similarity_scores[target] <- cosine_similarity(
+        target_group_avg$SCT[,1], ref_group_avg$SCT[,1]
+        )
+      
+    } else {
+      
+      # Calculate cosine similarity with the T cell average expression
+      similarity_scores[target] <- cor(
+        target_group_avg$SCT[,1], ref_group_avg$SCT[,1], method = method
+        )
+      
+    }
+  
+  }
+    
+    similarity_scores <- unlist(similarity_scores)
+    
   if (mode == "all") {
     
     # Extract the scaled data for similarity calculations.
     data_matrix <- GetAssayData(seurat_object, assay = "SCT", slot = "scale.data")
-
-  # Calculate similarity scores for all cells.
-    similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-      cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
-      })
+  
+    # Calculate similarity scores for all cells.
+      
+    if(method == "cosine") {
+  
+      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+        cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
+        })
+    } else {
+      
+      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+        cor(cell_expression, ref_group_avg$SCT[,1], method = method)
+        })
+    
+    }
     
   }
     
@@ -148,44 +206,18 @@ SC_similarity <- function(seurat_object, mode, target, reference) {
 }
 ```
 
-```{r T_avg_exp}
-
-# Calculate the average expression profile for T cells.
-t_group <- subset(SCP_data, Sample_Group == "T")
-t_group_avg <- AverageExpression(t_group, assay = "SCT", slot = "scale.data")
-```
-
-```{r data_matrix}
-
-# Extract the scaled data for similarity calculations.
-data_matrix <- GetAssayData(SCP_data, assay = "SCT", slot = "scale.data")
-```
-
 ## A. Cosine similarity calculation per cell.
 
-```{r calculate_scores}
+We consider a threshold of an 80% similarity enough for a dataset to be considered tumoral.
 
-# Calculate similarity scores for all cells.
-similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-  cosine_similarity(cell_expression, t_group_avg$SCT[,1])
-})
-
-similarity_scores
-```
-
-```{r get_scores}
-
-# Add similarity scores to the metadata of the Seurat object.
-SCP_data[["cosine_similarity"]] <- similarity_scores
-
-# Now we can access the similarity scores for the AT group
-similarity_scores_AT <- SCP_data$cosine_similarity[SCP_data$Sample_Group == "AT"]
-```
+Using this approach no cell meets the requirements.
 
 ```{r filter_cells}
 
+similarity_scores_AT <- SC_similarity(SCP_data, mode = "cell", target = "AT", reference = "T")
+
 # We set a threshold of similarity.
-threshold <- 0.5
+threshold <- 0.8
 similar_cells_AT <- names(similarity_scores_AT[similarity_scores_AT > threshold])
 
 length(similar_cells_AT)
@@ -193,31 +225,75 @@ length(similar_cells_AT)
 
 ## B. Cosine similarity calculation per sample.
 
-```{r}
+When applied to the average of all samples, all AT samples are classified as tumoral.
 
-AT_cells <- subset(SCP_data, Sample_Group == "AT")
-similarity_scores = list()
+```{r filter_samples}
 
-# Loop over each unique sample name to calculate similarity scores
-for (sample in unique(AT_cells$Sample_Name)) {
-  # Subset Seurat object for cells from the current sample
-  sample_cells <- subset(SCP_data, Sample_Name == sample)
-  
-  # Aggregate the expression data for the current sample
-  sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
-  
-  data_matrix <- GetAssayData(SCP_data, assay = "SCT", slot = "scale.data")
-  
-  # Calculate cosine similarity with the T cell average expression
-  similarity_scores[sample] <- cosine_similarity(sample_avg_expression$SCT[,1], t_group_avg$SCT[,1])
-  
-}
+similarity_scores_AT <- SC_similarity(SCP_data, mode = "sample", target = "AT", reference = "T")
 
-unlist(similarity_scores)
-#rm(sample_cells)
-#rm(sample_avg_expression)
-#rm(AT_cells)
+# We set a threshold of similarity.
+threshold <- 0.8
+similar_groups_AT <- names(similarity_scores_AT[similarity_scores_AT > threshold])
 
-# Create a named vector with similarity scores
-# names(similarity_scores) <- unique(SCP_data$Sample_Name)
+length(similar_groups_AT)
 ```
+
+## C. Cosine similarity calculation per group.
+
+When we use the average of the whole group, everything looks right, till we also check the similarity with the N group...
+
+```{r filter_groups}
+
+similarity_scores_AT <- SC_similarity(SCP_data, mode = "group", target = "AT", reference = "T")
+
+similarity_scores_AT
+```
+
+```{r N_group}
+
+test_N <- SC_similarity(SCP_data, mode = "group", target = "AT", reference = "N")
+
+test_N
+```
+
+Seems that heterogeneity of the biopsy composition creates too much noise for this method to be applicable. Actually, when we compare the T group vs the N group:
+
+```{r T_vs_N}
+
+TvsN <- SC_similarity(SCP_data, mode = "group", target = "T", reference = "N")
+
+TvsN
+```
+
+Taking into account that we are studying patients at low-risk-stages and reduced aggressiveness of the tumor and the intrinsic heterogeneity of the samples, the use of cosine similarity is not an appropriate method for sample comparison.
+
+Pearson correlation provides similar results:
+
+```{r pearson_test}
+
+TvsN <- SC_similarity(SCP_data, mode = "group", target = "T", reference = "N", method = "pearson")
+TvsN
+```
+
+We plot the N vs T group average expression and stimate its correlation as an example.
+
+```{r pearson_plot}
+
+# Calculate average expression of the reference group.
+ref_group <- subset(SCP_data, Sample_Group == "N")
+ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+  
+# Calculate average expression of the target group.
+target_cells <- subset(SCP_data, Sample_Group == "T")
+target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+  
+data <- data.frame(ref_group_avg$SCT[,1], target_group_avg$SCT[,1])
+  
+library("ggpubr")
+ggscatter(data, x = "ref_group_avg.SCT...1.", y = "target_group_avg.SCT...1.",
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "N group average expression", ylab = "T group average expression")
+```
+
+
