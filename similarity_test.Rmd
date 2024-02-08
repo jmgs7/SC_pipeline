@@ -1,0 +1,223 @@
+---
+title: "similarity_test"
+author: "José Manuel Gómez Silva"
+date: "2024-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries}
+
+library(Seurat)
+```
+
+# Testing similarity between cell groups.
+
+To implement the similarity score method, we would calculate a score that quantifies the resemblance between the gene expression profile of each AT and NAT cell and the average profile of T cells. A common similarity measure is the cosine similarity. Here's a step-by-step guide on how we will to implement this using R and the Seurat package:
+
+1.  Calculus of the Average Expression Profile for T group: First, we need to calculate the average expression profile for the T group. This will serve as the reference profile to which we will compare the AT cells.
+2.  Normalization and data scaling: We will ensure that our data is normalized and scaled appropriately to allow for meaningful comparisons between cells.
+3.  Calculus of the Similarity Scores: For each AT cell, calculate the similarity score with the average T cell profile using cosine similarity.
+4.  Interpretation of the Scores: Higher similarity scores indicate a closer resemblance to the T group profile. We will set a threshold to determine which cells are considered similar to T cells.
+
+The cosine method creates a vector with the expression values of the cells, represents it on a inner product space, calculates the cosine of the angle between the vectors and takes it as a measure of their similarity.
+
+```{r load_raw_data}
+
+SCP_data_raw <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+```
+
+```{r load_processed_data}
+
+SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+```
+
+For this purpose, we will create a function that calculates the cosine similarity of two vectors.
+
+The formula for the cosine similarity calculation based on the Euclidean dot product of two vectors is:
+
+![](images/clipboard-3315251487.png)
+
+The implementation for this in R would be:
+
+```{r cosine_func}
+
+# Function to calculate cosine similarity.
+cosine_similarity <- function(A, B) {
+  sum(A * B) / (sqrt(sum(A^2)) * sqrt(sum(B^2)))
+}
+```
+
+We then create a function to access the data in a SeuratObject and calculate the similarity score in three ways, per-cell, per-sample or per-group.
+
+This functions calculates the average expression vector for the specified reference group and compares a target group against it in a per-cell, per-sample or per-group approach.
+
+The function returns a named vector with the similarity score for each cell/sample or the whole group for the specified target. If the selected mode is "all" it would get the similarity score for all the cells in the dataset.
+
+```{r SC_similarity}
+
+SC_similarity <- function(seurat_object, mode, target, reference) {
+  
+  mode = tolower(mode)
+  target = toupper(target)
+  
+  # Calculate average expression of the reference group.
+  ref_group <- subset(seurat_object, Sample_Group == reference)
+  ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+  
+  # Get target cells.
+  target_cells <- subset(seurat_object, Sample_Group == target)
+  
+  if (mode == "cell") {
+    
+    # Extract the scaled data for similarity calculations.
+    data_matrix <- GetAssayData(target_cells, assay = "SCT", slot = "scale.data")
+
+  # Calculate similarity scores for all cells.
+    similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+      cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
+      })
+    
+  }
+  
+  if (mode == "sample") {
+    
+    target_cells <- subset(seurat_object, Sample_Group == target)
+    similarity_scores = list()
+    
+    # Loop over each unique sample name to calculate similarity scores.
+    for (sample in unique(target_cells$Sample_Name)) {
+      
+      # Subset Seurat object for cells from the current sample
+      sample_cells <- subset(target_cells, Sample_Name == sample)
+      
+      # Aggregate the expression data for the current sample
+      sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
+      
+      # Calculate cosine similarity with the T cell average expression
+      similarity_scores[sample] <- cosine_similarity(
+        sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1]
+        )
+      
+    }
+    
+    similarity_scores <- unlist(similarity_scores)
+    
+  }
+  
+  if (mode == "all") {
+    
+    # Extract the scaled data for similarity calculations.
+    data_matrix <- GetAssayData(seurat_object, assay = "SCT", slot = "scale.data")
+
+  # Calculate similarity scores for all cells.
+    similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+      cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
+      })
+    
+  }
+    
+  return(similarity_scores)
+  
+}
+```
+
+```{r T_avg_exp}
+
+# Calculate the average expression profile for T cells.
+t_group <- subset(SCP_data, Sample_Group == "T")
+t_group_avg <- AverageExpression(t_group, assay = "SCT", slot = "scale.data")
+```
+
+```{r data_matrix}
+
+# Extract the scaled data for similarity calculations.
+data_matrix <- GetAssayData(SCP_data, assay = "SCT", slot = "scale.data")
+```
+
+## A. Cosine similarity calculation per cell.
+
+```{r calculate_scores}
+
+# Calculate similarity scores for all cells.
+similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+  cosine_similarity(cell_expression, t_group_avg$SCT[,1])
+})
+
+similarity_scores
+```
+
+```{r get_scores}
+
+# Add similarity scores to the metadata of the Seurat object.
+SCP_data[["cosine_similarity"]] <- similarity_scores
+
+# Now we can access the similarity scores for the AT group
+similarity_scores_AT <- SCP_data$cosine_similarity[SCP_data$Sample_Group == "AT"]
+```
+
+```{r filter_cells}
+
+# We set a threshold of similarity.
+threshold <- 0.5
+similar_cells_AT <- names(similarity_scores_AT[similarity_scores_AT > threshold])
+
+length(similar_cells_AT)
+```
+
+## B. Cosine similarity calculation per sample.
+
+```{r}
+
+AT_cells <- subset(SCP_data, Sample_Group == "AT")
+similarity_scores = list()
+
+# Loop over each unique sample name to calculate similarity scores
+for (sample in unique(AT_cells$Sample_Name)) {
+  # Subset Seurat object for cells from the current sample
+  sample_cells <- subset(SCP_data, Sample_Name == sample)
+  
+  # Aggregate the expression data for the current sample
+  sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
+  
+  data_matrix <- GetAssayData(SCP_data, assay = "SCT", slot = "scale.data")
+  
+  # Calculate cosine similarity with the T cell average expression
+  similarity_scores[sample] <- cosine_similarity(sample_avg_expression$SCT[,1], t_group_avg$SCT[,1])
+  
+}
+
+unlist(similarity_scores)
+#rm(sample_cells)
+#rm(sample_avg_expression)
+#rm(AT_cells)
+
+# Create a named vector with similarity scores
+# names(similarity_scores) <- unique(SCP_data$Sample_Name)
+```

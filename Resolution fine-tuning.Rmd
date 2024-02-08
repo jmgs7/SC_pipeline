@@ -34,11 +34,9 @@ knitr::opts_chunk$set(
 
 # Resolution value fine-tuning.
 
-As reported by the Seurat team. A resolution value between 0.4 - 1.2 works well for an assay of 3k cells.
+As reported by the Seurat team. A resolution value between 0.4 - 1.2 works well for an assay of \~3k cells.
 
 Here we implement a loop that tests different resolution values with an increment of 0.1 between these two values.
-
-We will use Edu's pre-processed data.
 
 First, we import all necessary libraries.
 
@@ -61,27 +59,35 @@ plan("multicore", workers = detectCores())
 
 Load the data and apply the basic pipeline in one line.
 
-```{r previous_steps}
+```{r get_single_runs}
 
 test <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
 
 
 ```
 
+```{r get_merged_runs}
+
+test <- readRDS("../Data/SC_Prostate_raw.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>% SCTransform(vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident")) %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
+```
+
 In the script below we created a loop that test all values for resolution in a certain range. It also plots the resulting umaps and storage both the Seurat Objects and plots generated in two different lists (output_list and plot_list). We tested the resolution in a range between 0.4 - 1.2 as the Seurat teams indicates that is suitable for a dataset of up to 3k cells.
 
-```{r}
+\# Plot number of clusters against resolution.
+
+plot(resolution_values, nClusters)
+
+```{r cluster_optimization}
 
 # Set the range of values with an increment of 0.1
-start_value <- 0.4
-end_value <- 1.2
+start_value <- 0.1
+end_value <- 2
 increment <- 0.1
 
 
 # Create a loop to test the function with incremental values.
 
 # Create emtpy lists to storage data.
-output_list <- list()
 plot_list <- list()
 resolution_values <- list()
 nClusters <- list()
@@ -91,8 +97,7 @@ for (i in seq(start_value, end_value, by = increment)) {
   
   # Generate a new SeuratObjecto for each resolution value and storage it on a list.
   output <- FindClusters(test, resolution = i, verbose = FALSE) %>% RunUMAP(dims = 1:30, verbose = FALSE)
-  output_list[[length(output_list) + 1]] <- output
-  
+
   # Plot each group of clusters generated, save the images and store the plots in a list.
   plot <- DimPlot(output, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + ggtitle(paste0("Resolution = ", i)) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
   plot_list[[length(plot_list) + 1]] <- plot
@@ -112,7 +117,7 @@ for (i in seq(start_value, end_value, by = increment)) {
   cat("Calculated and plotted for resolution = ", i, "\n")
 }
 
-
+rm(test)
 rm(output)
 rm(output_clusters)
 rm(plot)
@@ -121,6 +126,9 @@ rm(i)
 # Transform the list to vectors in order to plot them.
 resolution_values <- unlist(resolution_values)
 nClusters <- unlist(nClusters)
+```
+
+```{r plotting}
 
 # Plot number of clusters against resolution.
 plot(resolution_values, nClusters)
