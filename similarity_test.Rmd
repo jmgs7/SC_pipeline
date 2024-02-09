@@ -35,6 +35,8 @@ knitr::opts_chunk$set(
 ```{r libraries}
 
 library(Seurat)
+library(ggpubr)
+library(ggplot2)
 ```
 
 # Testing similarity between cell groups.
@@ -57,15 +59,28 @@ For this purpose, we will create a function that calculates the cosine similarit
 
 The formula for the cosine similarity calculation based on the Euclidean dot product of two vectors is:
 
-![](images/clipboard-3315251487.png)
+![](images/clipboard-436058134.png)
 
 The implementation for this in R would be:
 
 ```{r cosine_func}
 
 # Function to calculate cosine similarity.
-cosine_similarity <- function(A, B) {
+CosineSimilarity <- function(A, B) {
   sum(A * B) / (sqrt(sum(A^2)) * sqrt(sum(B^2)))
+}
+```
+
+We also add the possibility to perform Pearson, Kendall or Spearman correlation tests with the method argument (default is cosine similarity):
+
+```{r}
+
+SimilarityScore <- function(x, y, method = "cosine") {
+  if (method == "cosine") {
+    CosineSimilarity(x, y)
+    } else {
+      cor(x, y, method = method)
+    }
 }
 ```
 
@@ -75,12 +90,10 @@ This functions calculates the average expression vector for the specified refere
 
 The function returns a named vector with the similarity score for each cell/sample or the whole group for the specified target. If the selected mode is "all" it would get the similarity score for all the cells in the dataset.
 
-We also add the possibility to perform Pearson, Kendall or Spearman correlation tests with the method argument (default is cosine similarity)
+```{r SCsimilarity}
 
-```{r SC_similarity}
-
-SC_similarity <- function(
-    seurat_object, mode, target, reference, method = "cosine"
+SCsimilarity <- function(
+    SeuratObject, mode, target, reference, use.top.genes = FALSE, n.top.genes = 50,  method = "cosine"
     ) {
   
   mode = tolower(mode)
@@ -88,121 +101,77 @@ SC_similarity <- function(
   method = tolower(method)
   
   # Calculate average expression of the reference group.
-  ref_group <- subset(seurat_object, Sample_Group == reference)
+  ref_group <- subset(SeuratObject, Sample_Group == reference)
   ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+  ref_group_avg <- ref_group_avg$SCT[,1]
   
   # Get target cells.
-  target_cells <- subset(seurat_object, Sample_Group == target)
+  target_cells <- subset(SeuratObject, Sample_Group == target)
+  
+  if (use.top.genes) {
+  # Get top genes.
+  top_genes <- head(VariableFeatures(SeuratObject), n.top.genes)
+  # Filter reference group genes.
+  ref_group_avg <- ref_group_avg[top_genes]
+  }
+
   
   if (mode == "cell") {
-    
     # Extract the scaled data for similarity calculations.
     data_matrix <- GetAssayData(target_cells, assay = "SCT", slot = "scale.data")
+    if (use.top.genes) {data_matrix <- data_matrix[top_genes,]}
 
   # Calculate similarity scores for all cells.
-  
-    if (method == "cosine") {
-  
-      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-        cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
-        })
-      
-    } else {
-      
-      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-        cor(cell_expression, ref_group_avg$SCT[,1], method = method)
-        })
-      
-    }
-
+    similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
+      SimilarityScore(cell_expression, ref_group_avg, method = method)
+      })
   }
   
+  
   if (mode == "sample") {
-    
     similarity_scores = list()
     
     # Loop over each unique sample name to calculate similarity scores
     for (sample in unique(target_cells$Sample_Name)) {
-      
       # Subset Seurat object for cells from the current sample
       sample_cells <- subset(target_cells, Sample_Name == sample)
       
       # Aggregate the expression data for the current sample
       sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
-      
-      # Calculate cosine similarity with the T cell average expression
-      
-      if (method == "cosine") {
-        
-        similarity_scores[sample] <- cosine_similarity(
-          sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1]
-          )
-        
-      } else {
-        
-        similarity_scores[sample] <- cor(
-          sample_avg_expression$SCT[,1], ref_group_avg$SCT[,1], method = method
-          )
-        
-      }
-      
+      sample_avg_expression <- sample_avg_expression$SCT[,1]
+      if (use.top.genes) {sample_avg_expression <- sample_avg_expression[top_genes]}
+
+      # Calculate cosine similarity with the reference group average expression
+     similarity_scores[sample] <- SimilarityScore(sample_avg_expression, ref_group_avg, method = method)
     }
     
     similarity_scores <- unlist(similarity_scores)
-    
   }
+  
   
   if (mode == "group") {
-    
-    similarity_scores = list()
-    
     # Aggregate the expression data for the current sample
     target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+    target_group_avg <- target_group_avg$SCT[,1]
+    if (use.top.genes) {target_group_avg <- target_group_avg[top_genes]}
     
-    if (method == "cosine") {
-      
-      # Calculate cosine similarity with the T cell average expression
-      similarity_scores[target] <- cosine_similarity(
-        target_group_avg$SCT[,1], ref_group_avg$SCT[,1]
-        )
-      
-    } else {
-      
-      # Calculate cosine similarity with the T cell average expression
-      similarity_scores[target] <- cor(
-        target_group_avg$SCT[,1], ref_group_avg$SCT[,1], method = method
-        )
-      
-    }
-  
+    similarity_scores <- SimilarityScore(target_group_avg, ref_group_avg, method = method)
   }
     
-    similarity_scores <- unlist(similarity_scores)
-    
+  
   if (mode == "all") {
-    
     # Extract the scaled data for similarity calculations.
-    data_matrix <- GetAssayData(seurat_object, assay = "SCT", slot = "scale.data")
+    data_matrix <- GetAssayData(SeuratObject, assay = "SCT", slot = "scale.data")
+    if (use.top.genes) {data_matrix <- data_matrix[top_genes,]}
   
     # Calculate similarity scores for all cells.
-      
-    if(method == "cosine") {
-  
       similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-        cosine_similarity(cell_expression, ref_group_avg$SCT[,1])
+        SimilarityScore(cell_expression, ref_group_avg, method = method)
         })
-    } else {
-      
-      similarity_scores <- apply(data_matrix, 2, function(cell_expression) {
-        cor(cell_expression, ref_group_avg$SCT[,1], method = method)
-        })
-    
-    }
-    
   }
+  
     
   return(similarity_scores)
-  
 }
 ```
 
@@ -214,7 +183,7 @@ Using this approach no cell meets the requirements.
 
 ```{r filter_cells}
 
-similarity_scores_AT <- SC_similarity(SCP_data, mode = "cell", target = "AT", reference = "T")
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "cell", target = "AT", reference = "T")
 
 # We set a threshold of similarity.
 threshold <- 0.8
@@ -229,7 +198,7 @@ When applied to the average of all samples, all AT samples are classified as tum
 
 ```{r filter_samples}
 
-similarity_scores_AT <- SC_similarity(SCP_data, mode = "sample", target = "AT", reference = "T")
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "sample", target = "AT", reference = "T")
 
 # We set a threshold of similarity.
 threshold <- 0.8
@@ -244,40 +213,40 @@ When we use the average of the whole group, everything looks right, till we also
 
 ```{r filter_groups}
 
-similarity_scores_AT <- SC_similarity(SCP_data, mode = "group", target = "AT", reference = "T")
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "T")
 
 similarity_scores_AT
 ```
 
 ```{r N_group}
 
-test_N <- SC_similarity(SCP_data, mode = "group", target = "AT", reference = "N")
+test_N <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "N")
 
 test_N
 ```
 
-Seems that heterogeneity of the biopsy composition creates too much noise for this method to be applicable. Actually, when we compare the T group vs the N group:
+Seems that heterogeneity of the biopsy itself creates too much noise for this method to be applicable. Actually, when we compare the T group vs the N group:
 
 ```{r T_vs_N}
 
-TvsN <- SC_similarity(SCP_data, mode = "group", target = "T", reference = "N")
+TvsN <- SCsimilarity(SCP_data, mode = "group", target = "T", reference = "N")
 
 TvsN
 ```
 
-Taking into account that we are studying patients at low-risk-stages and reduced aggressiveness of the tumor and the intrinsic heterogeneity of the samples, the use of cosine similarity is not an appropriate method for sample comparison.
+Taking into account that we are studying patients at low-risk-stages and reduced aggressiveness of the tumor, and the intrinsic heterogeneity of the samples, the use of cosine similarity is not an appropriate method for sample comparison.
 
 Pearson correlation provides similar results:
 
 ```{r pearson_test}
 
-TvsN <- SC_similarity(SCP_data, mode = "group", target = "T", reference = "N", method = "pearson")
+TvsN <- SCsimilarity(SCP_data, mode = "group", target = "T", reference = "N", method = "pearson")
 TvsN
 ```
 
-We plot the N vs T group average expression and stimate its correlation as an example.
+We plot the N vs T group average expression and estimate its correlation (Pearson) as an example.
 
-```{r pearson_plot}
+```{r pearson_plot, fig.height=6, fig.width=10}
 
 # Calculate average expression of the reference group.
 ref_group <- subset(SCP_data, Sample_Group == "N")
@@ -288,12 +257,104 @@ target_cells <- subset(SCP_data, Sample_Group == "T")
 target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
   
 data <- data.frame(ref_group_avg$SCT[,1], target_group_avg$SCT[,1])
-  
-library("ggpubr")
+
 ggscatter(data, x = "ref_group_avg.SCT...1.", y = "target_group_avg.SCT...1.",
           add = "reg.line", conf.int = TRUE, 
           cor.coef = TRUE, cor.method = "pearson",
           xlab = "N group average expression", ylab = "T group average expression")
 ```
 
+As we can see, both tumoral and healthy groups' expression profile pretty much coincides, so taking the whole transcriptome for comparison would not be an effective ways to asses sample similarity.
 
+Now we will try a method based on the expression signature given by the top 50 genes from the dataset.
+
+# Comparison with top variable genes.
+
+In the following figure we label the top 50 most variable genes among the dataset. We will use them to filter the
+
+```{r var_features, fig.height=6, fig.width=10}
+
+# Genes with differencial expression in different cells are good candidates to be biomarkers.
+# Identify the 50 most highly variable genes (this data is already stored in the SeuratObject)
+top_genes <- head(VariableFeatures(SCP_data), 50)
+
+# plot variable features with  labels
+plot1 <- VariableFeaturePlot(SCP_data)
+plot1 <- LabelPoints(plot = plot1, points = top_genes, repel = TRUE)
+plot1
+```
+
+Unfortunately, after repeating the same tests using exclusively the top variable genes, results are pretty much the same.
+
+```{r filter_top_genes}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "T", use.top.genes = TRUE)
+
+similarity_scores_AT
+```
+
+```{r N_group_top_genes}
+
+test_N <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "N", use.top.genes = TRUE)
+
+test_N
+```
+
+```{r pearson_plot_top_genes, fig.height=6, fig.width=10}
+
+# Calculate average expression of the reference group.
+ref_group <- subset(SCP_data, Sample_Group == "N")
+ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+ref_group_avg <- ref_group_avg$SCT[,1][top_genes]
+  
+# Calculate average expression of the target group.
+target_cells <- subset(SCP_data, Sample_Group == "T")
+target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+target_group_avg <- target_group_avg$SCT[,1][top_genes]
+  
+data <- data.frame(ref_group_avg, target_group_avg)
+
+ggscatter(data, x = "ref_group_avg", y = "target_group_avg",
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "N top genes average expression", ylab = "T top genes average expression")
+```
+
+We will now proceed to apply a different methodology in which we will use the diferentially expressed gene on each sample group to make the comparison.
+
+# Comparison using deferentially expressed genes.
+
+```{r}
+
+FC <- log2(1.5)
+
+DE_T <- FindMarkers(SCP_data, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group")
+DE_T <- subset(DE_T, DE_T$avg_log2FC > FC & DE_T$p_val_adj < 0.05 | DE_T$avg_log2FC < -FC & DE_T$p_val_adj < 0.05, select = "avg_log2FC")
+DE_T <- setNames(DE_T$avg_log2FC, row.names(DE_T))
+```
+
+```{r}
+
+FC <- log2(1.5)
+
+DE_AT <- FindMarkers(SCP_data, ident.1 = "AT", ident.2 = "N", group.by = "Sample_Group")
+DE_AT <- subset(DE_AT, DE_AT$avg_log2FC > FC & DE_AT$p_val_adj < 0.05 | DE_AT$avg_log2FC < -FC & DE_AT$p_val_adj < 0.05, select = "avg_log2FC")
+DE_AT <- setNames(DE_AT$avg_log2FC, row.names(DE_AT))
+```
+
+```{r}
+
+JaccardSimilarity <- function(x, y) {
+  # Compute Jaccard similarity coefficient
+  similarity_score <- length(intersect(x, y)) / length(union(x, y))
+  
+  return(similarity_score)
+}
+```
+
+```{r}
+
+intersect(DE_T, DE_AT)
+
+# RESUMEN: JACCARD NO, BUSCAR TEST DE SIMILARIDAD COMPATIBLE.
+```

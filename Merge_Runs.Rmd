@@ -400,11 +400,11 @@ We will now perform a DE analysis on cluster 18 by comparing cells coming from T
 
 Results are storaged as an tsv file for further exploration and a vulcan plot showing significant genes colored is provided. Top 10 up- and down-regulated genes by p-value are labeled.
 
-```{r}
+```{r DE_analysis}
 cluster18.markers <- FindMarkers(SCP_data, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-Endothelial_cells")
 ```
 
-```{r fig.height=6, fig.width=10}
+```{r vulcan_plot, fig.height=6, fig.width=10}
 
 FC = log2(1.5) # Set FC threshold.
 
