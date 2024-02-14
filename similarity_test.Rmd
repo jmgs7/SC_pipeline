@@ -59,7 +59,7 @@ For this purpose, we will create a function that calculates the cosine similarit
 
 The formula for the cosine similarity calculation based on the Euclidean dot product of two vectors is:
 
-![](images/clipboard-436058134.png)
+![](images/clipboard-436058134.png){width="675"}
 
 The implementation for this in R would be:
 
@@ -71,6 +71,34 @@ CosineSimilarity <- function(A, B) {
 }
 ```
 
+```{r JaccardSimilarity}
+
+JaccardSimilarity <- function(x, y) {
+  
+  # Step 1: Create gene sets
+  x_names <- names(x)
+  y_names <- names(y)
+  unique_names <- union(x_names, y_names)
+  
+  # Step 2: Determine direction of differential expression
+  x_up <- names(x[x > 0])
+  x_down <- names(x[x < 0])
+  y_up <- names(y[y > 0])
+  y_down <- names(y[y < 0])
+  
+  # Step 4: Calculate similarity score
+  num_overlap_up <- length(intersect(x_up, y_up))
+  num_overlap_down <- length(intersect(x_down, y_down))
+  num_unique_names <- length(unique_names)
+  
+  # Adjust the score based on direction
+  similarity_score <- (num_overlap_up + num_overlap_down) / num_unique_names
+  
+  return(similarity_score)
+
+}
+```
+
 We also add the possibility to perform Pearson, Kendall or Spearman correlation tests with the method argument (default is cosine similarity):
 
 ```{r}
@@ -78,6 +106,8 @@ We also add the possibility to perform Pearson, Kendall or Spearman correlation 
 SimilarityScore <- function(x, y, method = "cosine") {
   if (method == "cosine") {
     CosineSimilarity(x, y)
+    } else if (method == "jaccard") {
+    JaccardSimilarity(x, y)
     } else {
       cor(x, y, method = method)
     }
@@ -89,6 +119,84 @@ We then create a function to access the data in a SeuratObject and calculate the
 This functions calculates the average expression vector for the specified reference group and compares a target group against it in a per-cell, per-sample or per-group approach.
 
 The function returns a named vector with the similarity score for each cell/sample or the whole group for the specified target. If the selected mode is "all" it would get the similarity score for all the cells in the dataset.
+
+```{r SCDiffExp}
+
+SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.threshold = 0.05) {
+  
+  if (mode == "sample") {
+    group.by <- "Sample_Name"
+    } else if (mode == "group") {
+      group.by <- "Sample_Group"
+    } else {
+      print("DE analysis can only be executed by sample or by group")
+      return(NULL)
+    }
+  
+  FC <- log2(fc.threshold)
+  
+  DE <- FindMarkers(SeuratObject, ident.1 = test, ident.2 = control, group.by = group.by)
+  DE <- subset(DE, DE$avg_log2FC > FC & DE$p_val_adj < p.threshold |
+                 DE$avg_log2FC < -FC & DE$p_val_adj < p.threshold, select = "avg_log2FC")
+  DE <- setNames(DE$avg_log2FC, row.names(DE))
+  
+  return(DE)
+  
+}
+```
+
+```{r SimilarityScoreDiffExp}
+
+SimilariyScoreDiffExp <- function(SeuratObject, mode, target, reference, control, fc.threshold = 1.5, p.threshold = 0.05, method = "jaccard") {
+  
+  DE_target <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+  
+  DE_reference <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+  
+  
+  if (method == "jaccard" | method == "cosine") {
+    similarity_score <- SimilarityScore(DE_target, DE_reference, method = method)
+  } else {
+    print("Only Jaccard Index and Cosine Similarity methods available for DiffExp-based similarity")
+    similarity_score <- NULL
+  }
+
+  return(similarity_score)  
+}
+```
+
+```{r}
+
+data_matrix <- list()
+
+# Calculate average expression of the control group.
+ctrl_group <- subset(SCP_data, Sample_Group == "N")
+ctrl_group_avg <- AverageExpression(ctrl_group, assay = "SCT", slot = "scale.data")
+ctrl_group_avg <- ctrl_group_avg$SCT[,1]
+data_matrix[["control"]] <- ctrl_group_avg
+# Get target cells.
+target_cells <- subset(SCP_data, Sample_Group == "AT")
+
+# Loop over each unique sample name to calculate similarity scores
+for (sample in unique(target_cells$Sample_Name)) {
+    # Subset Seurat object for cells from the current sample
+    sample_cells <- subset(target_cells, Sample_Name == sample)
+      
+    # Aggregate the expression data for the current sample
+    sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
+    sample_avg_expression <- sample_avg_expression$SCT[,1]
+    data_matrix[[sample]] <- sample_avg_expression
+  
+}
+
+data_matrix <- do.call(cbind, data_matrix)
+```
+
+```{r}
+library(presto)
+
+wilcoxauc(data_matrix, y = colnames(data_matrix))
+```
 
 ```{r SCsimilarity}
 
@@ -335,8 +443,6 @@ DE_T <- setNames(DE_T$avg_log2FC, row.names(DE_T))
 
 ```{r}
 
-FC <- log2(1.5)
-
 DE_AT <- FindMarkers(SCP_data, ident.1 = "AT", ident.2 = "N", group.by = "Sample_Group")
 DE_AT <- subset(DE_AT, DE_AT$avg_log2FC > FC & DE_AT$p_val_adj < 0.05 | DE_AT$avg_log2FC < -FC & DE_AT$p_val_adj < 0.05, select = "avg_log2FC")
 DE_AT <- setNames(DE_AT$avg_log2FC, row.names(DE_AT))
@@ -344,17 +450,35 @@ DE_AT <- setNames(DE_AT$avg_log2FC, row.names(DE_AT))
 
 ```{r}
 
-JaccardSimilarity <- function(x, y) {
-  # Compute Jaccard similarity coefficient
-  similarity_score <- length(intersect(x, y)) / length(union(x, y))
+x <- DE_AT
+y <- DE_T
   
-  return(similarity_score)
-}
+  # Step 1: Create gene sets
+  x_names <- names(x)
+  y_names <- names(y)
+  unique_names <- union(x_names, y_names)
+  
+  # Step 2: Calculate overlap
+  overlap_names <- intersect(x_names, y_names)
+  
+  # Step 3: Determine direction of differential expression
+  x_up <- names(x[x > 0])
+  x_down <- names(x[x < 0])
+  y_up <- names(y[y > 0])
+  y_down <- names(y[y < 0])
+  
+  # Step 4: Calculate similarity score
+  num_overlap_up <- length(intersect(x_up, y_up))
+  num_overlap_down <- length(intersect(x_down, y_down))
+  num_unique_names <- length(unique_names)
+  
+  # Adjust the score based on direction
+  similarity_score <- (num_overlap_up + num_overlap_down) / num_unique_names
+  
+  similarity_score
 ```
 
 ```{r}
 
-intersect(DE_T, DE_AT)
-
-# RESUMEN: JACCARD NO, BUSCAR TEST DE SIMILARIDAD COMPATIBLE.
+SimilariyScoreDiffExp(SCP_data, mode = "group", target = "AT", reference = "T", control = "N")
 ```
