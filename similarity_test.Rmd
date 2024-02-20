@@ -124,8 +124,11 @@ The function returns a named vector with the similarity score for each cell/samp
 
 SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.threshold = 0.05) {
   
+  recorrect_umi <- TRUE
+  
   if (mode == "sample") {
     group.by <- "Sample_Name"
+    recorrect_umi <- FALSE
     } else if (mode == "group") {
       group.by <- "Sample_Group"
     } else {
@@ -135,7 +138,7 @@ SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.t
   
   FC <- log2(fc.threshold)
   
-  DE <- FindMarkers(SeuratObject, ident.1 = test, ident.2 = control, group.by = group.by)
+  DE <- FindMarkers(SeuratObject, ident.1 = test, ident.2 = control, group.by = group.by, recorrect_umi = recorrect_umi, assay = "SCT")
   DE <- subset(DE, DE$avg_log2FC > FC & DE$p_val_adj < p.threshold |
                  DE$avg_log2FC < -FC & DE$p_val_adj < p.threshold, select = "avg_log2FC")
   DE <- setNames(DE$avg_log2FC, row.names(DE))
@@ -145,57 +148,114 @@ SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.t
 }
 ```
 
+
+```{r}
+
+SCDiffExp.sample <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.threshold = 0.05) {
+  
+   if (mode == "sample") {
+    
+    ctrl_group <- subset(SeuratObject, Sample_Group == control)
+    ctrl_group$Sample_Name <- ctrl_group$Sample_Group
+    
+    test_cells <- subset(SeuratObject, Sample_Group == test)
+    DE_data <- merge(ctrl_group, test_cells)
+    
+    DE <- list()
+    # Loop over each unique sample name to calculate similarity scores
+    for (sample in unique(DE_data$Sample_Name)) {
+      if (sample != control) {
+  
+        DE[sample] <- SCDiffExp(SeuratObject = DE_data, mode = mode, test = sample, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+   
+      }   
+    }
+   } else {
+    
+     print("This function only executes DE by sample")
+     return(NULL)
+  }
+}
+
+```
+
 ```{r SimilarityScoreDiffExp}
 
 SimilariyScoreDiffExp <- function(SeuratObject, mode, target, reference, control, fc.threshold = 1.5, p.threshold = 0.05, method = "jaccard") {
   
-  DE_target <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
-  
-  DE_reference <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
-  
-  
-  if (method == "jaccard" | method == "cosine") {
-    similarity_score <- SimilarityScore(DE_target, DE_reference, method = method)
-  } else {
+  if (method != "jaccard" & method != "cosine") {
     print("Only Jaccard Index and Cosine Similarity methods available for DiffExp-based similarity")
-    similarity_score <- NULL
-  }
+    return(NULL)
+  } else {
+    
+    if (mode == "sample") {
+      
+      DE_target <- SCDiffExp.sample(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+      DE_reference <- SCDiffExp.sample(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+      
+      # For security, intersect the names of the samples and only estimate the similarity score of the common samples.
+      samples <- intersect(names(DE_target), names(DE_reference))
+      
+      ##  TODO: Create the loop to calculate the similarity scores between samples, review ALL the code.
+      
+    }
+    
+    DE_target <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+    
+    DE_reference <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+    
+    
+      similarity_score <- SimilarityScore(DE_target, DE_reference, method = method)
 
-  return(similarity_score)  
+  return(similarity_score)
+    
+  }
 }
 ```
 
 ```{r}
 
-data_matrix <- list()
+list <- list()
+
+list["cosa"] <- 1
+list["algo"] <- 2
+type(names(list))
+```
+
+
+
+```{r}
+
+# data_matrix <- list()
 
 # Calculate average expression of the control group.
 ctrl_group <- subset(SCP_data, Sample_Group == "N")
-ctrl_group_avg <- AverageExpression(ctrl_group, assay = "SCT", slot = "scale.data")
-ctrl_group_avg <- ctrl_group_avg$SCT[,1]
-data_matrix[["control"]] <- ctrl_group_avg
+ctrl_group$Sample_Name <- ctrl_group$Sample_Group
+# ctrl_group_avg <- AverageExpression(ctrl_group, assay = "SCT", slot = "scale.data")
+# ctrl_group_avg <- ctrl_group_avg$SCT[,1]
+# data_matrix[["control"]] <- ctrl_group_avg
 # Get target cells.
 target_cells <- subset(SCP_data, Sample_Group == "AT")
 
-# Loop over each unique sample name to calculate similarity scores
-for (sample in unique(target_cells$Sample_Name)) {
-    # Subset Seurat object for cells from the current sample
-    sample_cells <- subset(target_cells, Sample_Name == sample)
-      
-    # Aggregate the expression data for the current sample
-    sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
-    sample_avg_expression <- sample_avg_expression$SCT[,1]
-    data_matrix[[sample]] <- sample_avg_expression
-  
-}
+DE_data <- merge(ctrl_group, target_cells)
+#DE <- PrepSCTFindMarkers(DE_data, assay = "SCT")
+DE <- FindMarkers(DE_data, ident.1 = "CaPBi-23-20-S", ident.2 = "N", group.by = "Sample_Name", recorrect_umi = FALSE, assay = "SCT")
 
-data_matrix <- do.call(cbind, data_matrix)
-```
+DE_values <- SCDiffExp(DE_data, mode = "sample", test = "CaPBi-23-20-S", control = "N")
+DE_values
 
-```{r}
-library(presto)
-
-wilcoxauc(data_matrix, y = colnames(data_matrix))
+# # Loop over each unique sample name to calculate similarity scores
+# for (sample in unique(target_cells$Sample_Name)) {
+#   
+#     DE <- FindMarkers(DE_data, ident.1 = sample, ident.2 = "N", group.by = "Sample_Name", recorrect_umi = FALSE, assay = "SCT")
+#     # Aggregate the expression data for the current sample
+#     sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
+#     sample_avg_expression <- sample_avg_expression$SCT[,1]
+#     data_matrix[[sample]] <- sample_avg_expression
+# 
+# }
+# 
+# data_matrix <- do.call(cbind, data_matrix)
 ```
 
 ```{r SCsimilarity}
@@ -378,7 +438,7 @@ Now we will try a method based on the expression signature given by the top 50 g
 
 # Comparison with top variable genes.
 
-In the following figure we label the top 50 most variable genes among the dataset. We will use them to filter the
+In the following figure we label the top 50 most variable genes among the dataset. We will use them to filter the gene expression profile.
 
 ```{r var_features, fig.height=6, fig.width=10}
 
@@ -428,7 +488,7 @@ ggscatter(data, x = "ref_group_avg", y = "target_group_avg",
           xlab = "N top genes average expression", ylab = "T top genes average expression")
 ```
 
-We will now proceed to apply a different methodology in which we will use the diferentially expressed gene on each sample group to make the comparison.
+We will now proceed to apply a different methodology in which we will use the differentially expressed gene on each sample group to make the comparison.
 
 # Comparison using deferentially expressed genes.
 
@@ -446,36 +506,6 @@ DE_T <- setNames(DE_T$avg_log2FC, row.names(DE_T))
 DE_AT <- FindMarkers(SCP_data, ident.1 = "AT", ident.2 = "N", group.by = "Sample_Group")
 DE_AT <- subset(DE_AT, DE_AT$avg_log2FC > FC & DE_AT$p_val_adj < 0.05 | DE_AT$avg_log2FC < -FC & DE_AT$p_val_adj < 0.05, select = "avg_log2FC")
 DE_AT <- setNames(DE_AT$avg_log2FC, row.names(DE_AT))
-```
-
-```{r}
-
-x <- DE_AT
-y <- DE_T
-  
-  # Step 1: Create gene sets
-  x_names <- names(x)
-  y_names <- names(y)
-  unique_names <- union(x_names, y_names)
-  
-  # Step 2: Calculate overlap
-  overlap_names <- intersect(x_names, y_names)
-  
-  # Step 3: Determine direction of differential expression
-  x_up <- names(x[x > 0])
-  x_down <- names(x[x < 0])
-  y_up <- names(y[y > 0])
-  y_down <- names(y[y < 0])
-  
-  # Step 4: Calculate similarity score
-  num_overlap_up <- length(intersect(x_up, y_up))
-  num_overlap_down <- length(intersect(x_down, y_down))
-  num_unique_names <- length(unique_names)
-  
-  # Adjust the score based on direction
-  similarity_score <- (num_overlap_up + num_overlap_down) / num_unique_names
-  
-  similarity_score
 ```
 
 ```{r}
