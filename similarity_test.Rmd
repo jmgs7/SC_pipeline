@@ -48,6 +48,8 @@ To implement the similarity score method, we would calculate a score that quanti
 3.  Calculus of the Similarity Scores: For each AT cell, calculate the similarity score with the average T cell profile using cosine similarity.
 4.  Interpretation of the Scores: Higher similarity scores indicate a closer resemblance to the T group profile. We will set a threshold to determine which cells are considered similar to T cells.
 
+We will follow this steps using 3 different data sources: the normalized counts, the same data from the top variable genes, and the lgg2FC from the top differentially expressed genes.
+
 The cosine method creates a vector with the expression values of the cells, represents it on a inner product space, calculates the cosine of the angle between the vectors and takes it as a measure of their similarity.
 
 ```{r load_processed_data}
@@ -70,6 +72,12 @@ CosineSimilarity <- function(A, B) {
   sum(A * B) / (sqrt(sum(A^2)) * sqrt(sum(B^2)))
 }
 ```
+
+Another method is the Jaccard Index, whic measures similarity between finite sample sets, and is defined as the size of the intersection divided by the size of the union of the sample sets:
+
+![](images/eaef5aa86949f49e7dc6b9c8c3dd8b233332c9e7.svg){width="672"}
+
+This method is specially usefull to compare the list of differentiallly expressed genes of two different datasets compared againts a common control. Here is the R implementation:
 
 ```{r JaccardSimilarity}
 
@@ -101,9 +109,12 @@ JaccardSimilarity <- function(x, y) {
 
 We also add the possibility to perform Pearson, Kendall or Spearman correlation tests with the method argument (default is cosine similarity):
 
-```{r}
+```{r SimilarityScore}
 
 SimilarityScore <- function(x, y, method = "cosine") {
+  
+  method = tolower(method)
+  
   if (method == "cosine") {
     CosineSimilarity(x, y)
     } else if (method == "jaccard") {
@@ -120,27 +131,59 @@ This functions calculates the average expression vector for the specified refere
 
 The function returns a named vector with the similarity score for each cell/sample or the whole group for the specified target. If the selected mode is "all" it would get the similarity score for all the cells in the dataset.
 
+We added additional function to also test this using the data only from the top variable genes and the differentially expressed genes of from the two groups
+
 ```{r SCDiffExp}
 
 SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.threshold = 0.05) {
+  # NOTE: DE = Differential Expression
   
+  # SCDiffExp automatically performs a DE analysis over a SeuratObject to the indicated cells sets. IMPORTANT: It requieres normalized data by SCTransform. Retuns the FC of each significant DE gene in a named vector where the vector names are the gene names.
+  
+  # SeuratObject: The Seurat data.
+  # mode = sample or group approach.
+  # test = The tested set of cells for the DE analysis.
+  # control = The group of cells which the test set is compared against.
+  # fc.threshold = FC threshold to filter the DE analysis output.
+  # p.threshold = p-ajd threshold to filter the DE analysis output.
+  
+  # Checks if Seurat if install with require and if not, tries to install it. If installation fails, the function is stopped.
+  if (!require("Seurat", character.only = TRUE)) {
+    cat("Package Seurat not found, trying to install...\n")
+    install.packages("Seurat")
+    if (!require("Seurat", character.only = TRUE)) {
+      stop("Package Seurat not found")
+    }
+  }
+  
+  # Controls cases. Be aware this is only applicable for the current project, if function is reused, we recommend to skip this control
+  mode = tolower(mode)
+  control = toupper(control)
+  
+  # Avoids error in FindMarkers after using two merged SeuratOjects which comes from the same SeuratObject originally.
   recorrect_umi <- TRUE
-  
+
   if (mode == "sample") {
     group.by <- "Sample_Name"
     recorrect_umi <- FALSE
     } else if (mode == "group") {
       group.by <- "Sample_Group"
     } else {
-      print("DE analysis can only be executed by sample or by group")
+      cat("DE analysis can only be executed by sample or by group\n")
       return(NULL)
     }
   
+  # Set FC threshold.
   FC <- log2(fc.threshold)
   
+  # Calls Seurat's FindMarkers. Test vs Control.
   DE <- FindMarkers(SeuratObject, ident.1 = test, ident.2 = control, group.by = group.by, recorrect_umi = recorrect_umi, assay = "SCT")
+  
+  # Filter relevant genes.
   DE <- subset(DE, DE$avg_log2FC > FC & DE$p_val_adj < p.threshold |
                  DE$avg_log2FC < -FC & DE$p_val_adj < p.threshold, select = "avg_log2FC")
+  
+  # Returns a named vector with the FC values and gene names as vector's names.
   DE <- setNames(DE$avg_log2FC, row.names(DE))
   
   return(DE)
@@ -148,125 +191,137 @@ SCDiffExp <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.t
 }
 ```
 
+```{r SCDiffExp.sample}
 
-```{r}
-
-SCDiffExp.sample <- function(SeuratObject, mode, test, control, fc.threshold = 1.5, p.threshold = 0.05) {
+SCDiffExp.sample <- function(SeuratObject, mode = "sample", test, control, fc.threshold = 1.5, p.threshold = 0.05) {
+  # NOTE: DE = Differential Expression
   
-   if (mode == "sample") {
-    
-    ctrl_group <- subset(SeuratObject, Sample_Group == control)
-    ctrl_group$Sample_Name <- ctrl_group$Sample_Group
-    
-    test_cells <- subset(SeuratObject, Sample_Group == test)
-    DE_data <- merge(ctrl_group, test_cells)
-    
-    DE <- list()
-    # Loop over each unique sample name to calculate similarity scores
-    for (sample in unique(DE_data$Sample_Name)) {
-      if (sample != control) {
+  # This function is an interface for SCDiffExp to easily perform DE nalysis over all the samples contained in a certain group against the whole expression of a control group. It outputs a list of named vectors, each one containin the DE profile of a sample. The list element's names are the genes names.
   
-        DE[sample] <- SCDiffExp(SeuratObject = DE_data, mode = mode, test = sample, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
-   
-      }   
+  # SeuratObject: The Seurat data.
+  # mode = sample approach only.
+  # test = The tested set of cells for the DE analysis.
+  # control = The group of cells which the test set is compared against.
+  # fc.threshold = FC threshold to filter the DE analysis output.
+  # p.threshold = p-ajd threshold to filter the DE analysis output.
+  
+  # Checks if Seurat if install with require and if not, tries to install it. If installation fails, the function is stopped.
+  if (!require("Seurat", character.only = TRUE)) {
+    cat("Package Seurat not found, trying to install...\n")
+    install.packages("Seurat")
+    if (!require("Seurat", character.only = TRUE)) {
+      stop("Package Seurat not found")
     }
-   } else {
-    
-     print("This function only executes DE by sample")
+  }
+  
+  # Controls cases. Be aware this is only applicable for the current project, if function is reused, we recommend to skip this control
+  mode = tolower(mode)
+  test = toupper(test)
+  control = toupper(control)
+  
+  if (mode != "sample") {
+     cat("This function only executes DE by sample\n")
      return(NULL)
   }
+  
+  # Step 1: subset the control group. For convenience, the sample group is added as the sample name for all cells. That way all the control group will be treated as a single sample in further steps.
+  ctrl_group <- subset(SeuratObject, Sample_Group == control)
+  ctrl_group$Sample_Name <- ctrl_group$Sample_Group
+  
+  # Step 2: Subset the test group.
+  test_cells <- subset(SeuratObject, Sample_Group == test)
+  DE_data <- merge(ctrl_group, test_cells)
+  
+  # Storage each sample's DE profile as a vector and outputs all sample's vector as a list.   
+  DE <- list()
+  # Loop over each unique sample name to calculate similarity scores. The control will always be same, whereas it iterates over the samples of the test group.
+  for (sample in unique(DE_data$Sample_Name)) {
+    # Avoids testing the control against itself.
+    if (sample != control) {
+    # Each vector is named after its sample.
+    DE[[sample]] <- SCDiffExp(SeuratObject = DE_data, mode = mode, test = sample, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+    }
+  }
+  
+  return(DE)
 }
 
 ```
 
 ```{r SimilarityScoreDiffExp}
 
-SimilariyScoreDiffExp <- function(SeuratObject, mode, target, reference, control, fc.threshold = 1.5, p.threshold = 0.05, method = "jaccard") {
+SimilarityScoreDiffExp <- function(SeuratObject, mode, target, reference, control, fc.threshold = 1.5, p.threshold = 0.05, method = "jaccard") {
+  # NOTE: DE = Differential Expression.
   
+  # SimilarityScoreDiffExp calculates the similarities scores based on the obtained differential expression profile of the samples. It can perfomed this analysis on a group-wise or sample-wise approach:
+  # - Group-wise: Target group vs reference group.
+  # - Sample-wise: Each sample of the target group vs reference group. It outputs a vector with the sample names as the vector's names and the similarity score as values.
+  
+  # SeuratObject: The Seurat data.
+  # mode = sample or group approach.
+  # target = This is the set of cells that we want to know if it is similar to another "reference" set based on their DE profile agains a "control" set.
+  # reference: The set of cells we want to use for the comparison
+  # control = The set of cells which reference and control groups are compared against to obtain their DE profiles.
+  # fc.threshold = FC threshold to filter the DE analysis output.
+  # p.threshold = p-ajd threshold to filter the DE analysis output.
+  
+  # Controls cases. Be aware this is only applicable for the current project, if function is reused, we recommend to skip this control
+  mode = tolower(mode)
+  method = tolower(method)
+  target = toupper(target)
+  reference = toupper(reference)
+  control = toupper(control)
+  
+  # Only Jaccard Index and Cosine Similarity are compatible with DE approach.
   if (method != "jaccard" & method != "cosine") {
-    print("Only Jaccard Index and Cosine Similarity methods available for DiffExp-based similarity")
+    cat("Only Jaccard Index and Cosine Similarity methods available for DiffExp-based similarity\n")
     return(NULL)
-  } else {
+  }
     
     if (mode == "sample") {
       
+      # Get the list of all the sample's DE profiles.
       DE_target <- SCDiffExp.sample(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
-      DE_reference <- SCDiffExp.sample(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
       
-      # For security, intersect the names of the samples and only estimate the similarity score of the common samples.
-      samples <- intersect(names(DE_target), names(DE_reference))
+      # Obtain the reference group's DE profile.
+      DE_reference <- SCDiffExp(SeuratObject = SeuratObject, mode = "group", test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
       
-      ##  TODO: Create the loop to calculate the similarity scores between samples, review ALL the code.
+      # Storage the similarity score of all samples in a list.
+      similarity_score <- list()
+      for (sample in unique(names(DE_target))) {
+        similarity_score[sample] <- SimilarityScore(DE_target[[sample]], DE_reference, method = method)
+      }
+      similarity_score <- unlist(similarity_score)
       
-    }
-    
-    DE_target <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+    } else if (mode == "group") {
+      
+      DE_target <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = target, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
     
     DE_reference <- SCDiffExp(SeuratObject = SeuratObject, mode = mode, test = reference, control = control, fc.threshold = fc.threshold, p.threshold = p.threshold)
+      
+    similarity_score <- SimilarityScore(DE_target, DE_reference, method = method)
+      
+    } else {
+      
+      cat("DE-based similarity score calculation can only be executed by sample or by group\n")
+      similarity_score <- NULL
+    }
     
-    
-      similarity_score <- SimilarityScore(DE_target, DE_reference, method = method)
-
   return(similarity_score)
-    
-  }
 }
-```
-
-```{r}
-
-list <- list()
-
-list["cosa"] <- 1
-list["algo"] <- 2
-type(names(list))
-```
-
-
-
-```{r}
-
-# data_matrix <- list()
-
-# Calculate average expression of the control group.
-ctrl_group <- subset(SCP_data, Sample_Group == "N")
-ctrl_group$Sample_Name <- ctrl_group$Sample_Group
-# ctrl_group_avg <- AverageExpression(ctrl_group, assay = "SCT", slot = "scale.data")
-# ctrl_group_avg <- ctrl_group_avg$SCT[,1]
-# data_matrix[["control"]] <- ctrl_group_avg
-# Get target cells.
-target_cells <- subset(SCP_data, Sample_Group == "AT")
-
-DE_data <- merge(ctrl_group, target_cells)
-#DE <- PrepSCTFindMarkers(DE_data, assay = "SCT")
-DE <- FindMarkers(DE_data, ident.1 = "CaPBi-23-20-S", ident.2 = "N", group.by = "Sample_Name", recorrect_umi = FALSE, assay = "SCT")
-
-DE_values <- SCDiffExp(DE_data, mode = "sample", test = "CaPBi-23-20-S", control = "N")
-DE_values
-
-# # Loop over each unique sample name to calculate similarity scores
-# for (sample in unique(target_cells$Sample_Name)) {
-#   
-#     DE <- FindMarkers(DE_data, ident.1 = sample, ident.2 = "N", group.by = "Sample_Name", recorrect_umi = FALSE, assay = "SCT")
-#     # Aggregate the expression data for the current sample
-#     sample_avg_expression <- AverageExpression(sample_cells, assay = "SCT", slot = "scale.data")
-#     sample_avg_expression <- sample_avg_expression$SCT[,1]
-#     data_matrix[[sample]] <- sample_avg_expression
-# 
-# }
-# 
-# data_matrix <- do.call(cbind, data_matrix)
 ```
 
 ```{r SCsimilarity}
 
 SCsimilarity <- function(
-    SeuratObject, mode, target, reference, use.top.genes = FALSE, n.top.genes = 50,  method = "cosine"
+    SeuratObject, mode, target, reference, control = NULL, use.top.genes = FALSE, n.top.genes = 50,  use.diffexp = FALSE, method = "cosine", fc.threshold = 1.5, p.threshold = 0.05
     ) {
   
   mode = tolower(mode)
-  target = toupper(target)
   method = tolower(method)
+  target = toupper(target)
+  reference = toupper(reference)
+  control = toupper(control)
   
   # Calculate average expression of the reference group.
   ref_group <- subset(SeuratObject, Sample_Group == reference)
@@ -276,13 +331,27 @@ SCsimilarity <- function(
   # Get target cells.
   target_cells <- subset(SeuratObject, Sample_Group == target)
   
-  if (use.top.genes) {
-  # Get top genes.
-  top_genes <- head(VariableFeatures(SeuratObject), n.top.genes)
-  # Filter reference group genes.
-  ref_group_avg <- ref_group_avg[top_genes]
+  if (use.diffexp) {
+    
+    if (is.null(control)) {
+      cat("Please, indicate the control group for the DE analysis\n")
+      return(NULL)
+    }
+    
+    use.top.genes = FALSE
+    
+    similarity_scores <- SimilarityScoreDiffExp(SeuratObject, mode, target, reference, control, method, fc.threshold, p.threshold)
+    return(similarity_scores)
   }
-
+  
+  
+  if (use.top.genes) {
+    # Get top genes.
+    top_genes <- head(VariableFeatures(SeuratObject), n.top.genes)
+    # Filter reference group genes.
+    ref_group_avg <- ref_group_avg[top_genes]
+  }
+  
   
   if (mode == "cell") {
     # Extract the scaled data for similarity calculations.
@@ -491,6 +560,12 @@ ggscatter(data, x = "ref_group_avg", y = "target_group_avg",
 We will now proceed to apply a different methodology in which we will use the differentially expressed gene on each sample group to make the comparison.
 
 # Comparison using deferentially expressed genes.
+
+```{r}
+
+SCsimilarity(SCP_data, mode = "sample", target = "AT", reference = "T", use.diffexp = FALSE, method = "cosine")
+
+```
 
 ```{r}
 
