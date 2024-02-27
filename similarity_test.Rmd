@@ -2,7 +2,7 @@
 title: "Similarity test of SC Prostate Data"
 author: "José Manuel Gómez Silva"
 date: "2024-02-08"
-output: html_notebook
+output: # html_notebook
 ---
 
 ```{r setup, include=FALSE}
@@ -513,7 +513,7 @@ SimilarityScore.Data <- function(SeuratObject, mode = "group", target, reference
   # Per-cell analysis. Returns a vector with all the scores.
   if (mode == "cell") {
     # Extract the scaled data for similarity calculations.
-    data_matrix <- GetAssayData(target_cells, assay = "SCT", slot = "scale.data")
+    data_matrix <- GetAssayData(target_cells, assay = "SCT", slot = "scale.data") 
     if (use.top.genes) {data_matrix <- data_matrix[top_genes,]}
 
   # Calculate similarity scores for all cells of the target group.
@@ -879,7 +879,7 @@ DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE) + theme(axis.t
 
 ## Comparison using normalized data (no DE).
 
-When using the norm counts we obtein similar results, groups are very similar between them.
+When using the norm counts we obtain similar results, groups are very similar between them.
 
 AT/T similarity:
 
@@ -901,7 +901,7 @@ TvsN
 
 ## Filtering by top variable genes.
 
-We obtein results when filtering the 50 top most variable genes.
+We obtain results when filtering the 50 top most variable genes.
 
 AT/T similarity:
 
@@ -942,3 +942,170 @@ similarity_scores_AT
 ```
 
 Unfortunately, results doesn't change when we look at each cluster individually.
+
+# Testing AT vs NAT (not red) similarity for samples CaPBi-23-43-T-AT & CaPBi-23-38-S-AT.
+
+## Using norm data:
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "sample", target = "AT", reference = "NAT")
+
+# We set a threshold of similarity.
+threshold <- 0.8
+similar_groups_AT <- names(similarity_scores_AT[similarity_scores_AT > threshold])
+
+length(similar_groups_AT)
+similarity_scores_AT
+```
+
+Cosine similarity calculation per group.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "NAT")
+
+similarity_scores_AT
+```
+
+Seems that heterogeneity of the biopsy itself creates too much noise for this method to be applicable. Actually, when we compare the T group vs the NAT group:
+
+```{r}
+
+TvsNAT <- SCsimilarity(SCP_data, mode = "group", target = "T", reference = "NAT")
+
+TvsNAT
+```
+
+Taking into account that we are studying patients at low-risk-stages and reduced aggressiveness of the tumor, and the intrinsic heterogeneity of the samples, the use of cosine similarity is not an appropriate method for sample comparison.
+
+Pearson correlation provides similar results:
+
+```{r}
+
+TvsNAT <- SCsimilarity(SCP_data, mode = "group", target = "T", reference = "NAT", method = "pearson")
+TvsNAT
+```
+
+We plot the NAT vs AT group average expression and estimate its correlation (Pearson) as an example.
+
+```{r fig.height=6, fig.width=10}
+
+# Calculate average expression of the reference group.
+ref_group <- subset(SCP_data, Sample_Group == "NAT")
+ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+  
+# Calculate average expression of the target group.
+target_cells <- subset(SCP_data, Sample_Group == "AT")
+target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+  
+data <- data.frame(ref_group_avg$SCT[,1], target_group_avg$SCT[,1])
+
+ggscatter(data, x = "ref_group_avg.SCT...1.", y = "target_group_avg.SCT...1.",
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NAT group average expression", ylab = "AT group average expression")
+```
+
+## Using top variable genes.
+
+We try using top most variable genes from the dataset. Unfortunately, after repeating the same tests using exclusively the top variable genes, results are pretty much the same.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "sample", target = "AT", reference = "NAT", use.top.genes = TRUE)
+
+similarity_scores_AT
+```
+
+```{r}
+
+test_NAT <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "NAT", use.top.genes = TRUE)
+
+test_NAT
+```
+
+```{r fig.height=6, fig.width=10}
+
+# Calculate average expression of the reference group.
+ref_group <- subset(SCP_data, Sample_Group == "NAT")
+ref_group_avg <- AverageExpression(ref_group, assay = "SCT", slot = "scale.data")
+ref_group_avg <- ref_group_avg$SCT[,1][top_genes]
+  
+# Calculate average expression of the target group.
+target_cells <- subset(SCP_data, Sample_Group == "AT")
+target_group_avg <- AverageExpression(target_cells, assay = "SCT", slot = "scale.data")
+target_group_avg <- target_group_avg$SCT[,1][top_genes]
+  
+data <- data.frame(ref_group_avg, target_group_avg)
+
+ggscatter(data, x = "ref_group_avg", y = "target_group_avg",
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "NAT top genes average expression", ylab = "AT top genes average expression")
+```
+
+## Using DE profile.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "sample", target = "AT", reference = "NAT", control = "N", use.diffexp = TRUE)
+
+similarity_scores_AT
+
+```
+
+The good thing about this results is that the samples we suspect to be T are among the ones with the lowest similarity scores compared to the NAT group. Thus indicating they are more similar to AT rather than NAT, despite the similarity scores when compared vs T being low.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "group", target = "AT", reference = "NAT", control = "N", use.diffexp = TRUE)
+
+similarity_scores_AT
+
+```
+
+Interestingly, the score is much lower when compared to the NAT group rather than the T group, indicating higher similarity between AT and T.
+
+## Per-cluster analysis.
+
+### Comparison using normalized data (no DE).
+
+When using the norm counts we obtain similar results, groups are very similar between them.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "ident", target = "AT", reference = "NAT")
+
+similarity_scores_AT
+```
+
+### Filtering by top variable genes.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "ident", target = "AT", reference = "NAT", use.top.genes = TRUE)
+
+similarity_scores_AT
+```
+
+### Using DE genes.
+
+We try using the differential expression profile of each group on each cluster.
+
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "ident", method = "jaccard", target = "AT", reference = "NAT", control = "N", use.diffexp = TRUE)
+
+similarity_scores_AT
+```
+
+As the number of samples is severely reduced when subseting by cluster, statistical power is lost. We repeat the analysis using non-adjusted p-values. Is interesting that the cluster 22 presents a relatively high score when omiting p-adj values.
+```{r}
+
+similarity_scores_AT <- SCsimilarity(SCP_data, mode = "ident", method = "jaccard", target = "AT", reference = "NAT", control = "N", use.diffexp = TRUE, p.adj = FALSE)
+
+similarity_scores_AT
+```
+
+What we can conclude from this is that, in general,  using normalized values gives always to high similarities that doesn't seem real. When using DE profiles, is hard to get values above 10%, but offers interesting information when used in a relative way. When comparing the DE profiles of AT vs T/NAT, we see that in general, scores are higher when compared to the T group.
