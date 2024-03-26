@@ -2,7 +2,7 @@
 title: "Run1_analysis"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
-output: html_notebook
+output: # html_notebook
 ---
 
 ```{r setup, include=FALSE}
@@ -63,6 +63,7 @@ run1 # Show information about the Seurat object.
 ```
 
 ```{r}
+
 rm(run1)
 ```
 
@@ -197,7 +198,7 @@ The vars.to.regress parameter allows to regress out certain variables, preventin
 
 ```{r SCTransform}
 
-run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
+run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt", seed.use = NULL)
 ```
 
 ### 2.6. Visualizing QC parameters after normalization.
@@ -224,7 +225,7 @@ plot1 + plot2
 ```{r PCA, fig.height=6, fig.width=10}
 
 # Run PCA on the SCT-normalyzed data.
-run1.subset <- RunPCA(run1.subset, assay = "SCT") # features = VariableFeatures(object = run1.subset))
+run1.subset <- RunPCA(run1.subset, assay = "SCT", seed.use = NULL) # features = VariableFeatures(object = run1.subset))
 
 DimPlot(run1.subset, reduction = "pca") + NoLegend() # An unique PCA is not enough to separate cell groups.
 
@@ -247,7 +248,7 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = "pca")
 # Resolution fine-tuned in a separate Rmd.
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
 run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
-run1.subset <- RunUMAP(run1.subset, dims = 1:30)
+run1.subset <- RunUMAP(run1.subset, dims = 1:30, seed.use = NULL)
 ```
 
 ```{r cluster_visualization, fig.height=6, fig.width=10}
