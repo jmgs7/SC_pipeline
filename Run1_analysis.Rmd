@@ -49,6 +49,9 @@ library(readODS) # Allows ods file import to add sample info
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
+
+# Import user's libraries.
+source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
 ```
 
 ## 1. Import data and exploratory analysis.
@@ -58,13 +61,13 @@ Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csi
 These data contains raw counts and a previously normalized dataset. Nevertheless, we re-run the normalization using the new SCTransform method.
 
 ```{r import_data}
-run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
-run1 # Show information about the Seurat object.
+# run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
+# run1 # Show information about the Seurat object.
 ```
 
 ```{r}
 
-rm(run1)
+# rm(run1)
 ```
 
 Data from run1 contained 3809 cells originally . After eliminating cells tagged (they are label at `run1@metadata[["Sample_Tag"]])`\` as "undetermined" (no UMIs) or "multiplet" (droplets with more than 1 cell), 3118 cells remained. Next, 3 criteria was followed in order to filter the cells:
@@ -100,8 +103,6 @@ run1.raw
 
 ```{r mito_genes}
 run1.raw[["percent.mt"]] <- PercentageFeatureSet(run1.raw, pattern = "^MT-")
-
-run1.raw[["percent.mt"]][1:5, ]
 ```
 
 ### 2.2. QC visualization.
@@ -124,7 +125,7 @@ VlnPlot(run1.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2 <- FeatureScatterGradient(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
 plot1 + plot2
 ```
 
@@ -139,6 +140,7 @@ We could hard-code the parameters used by the CSIC, but as we cannot know the me
 UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
 
 ```{r filtering_percentiles}
+
 # Remove Undetermined and multiplets.
 run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
 
@@ -159,7 +161,50 @@ run1.subset <- subset(run1.subset, subset = nFeature_RNA > featureLOW & nFeature
 run1.subset
 ```
 
-### 2.4. Adding sample names and sample groups.
+### 2.4. Visualizing QC parameters after filtering.
+
+After filtering we can see that the distribution of mitochondrial DNA improves a bit, and the ration between counts and features is closer to a linear function.
+
+Another thing that don't make sense is the long upper tails of the features and counts distribution. Maybe is possible to apply a more strict cut, but we have to remember we have a low number of cells and there is more data yet to be added.
+
+```{r QC_filter, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Zoom in on nCount_RNA violin plot.
+VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot1 + plot2
+```
+Before and after:
+
+```{r before and after, fig.height=6, fig.width=10}
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatterGradient(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot2 <- FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot1 + plot2
+```
+
+We need to perform an additional filtering step to remove a group of low feature and read count cells.
+
+```{r additional_trimming}
+
+# Trim out the low-feature low-count cell group.
+run1.subset <- subset(run1.subset, subset = nFeature_RNA > 1000)
+
+run1.subset
+```
+
+```{r trimming_check}
+
+FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+```
+
+### 2.5. Adding sample names and sample groups.
 
 ```{r}
 
@@ -190,7 +235,7 @@ run1.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run
 saveRDS(run1.subset, file = "~/Documents/SC_Prostate/Data/run1/run1_filtered.rds")
 ```
 
-### 2.5. Normalization using SCTransform.
+### 2.6. Normalization using SCTransform.
 
 We normalize data using the new SCTransform methodology. This methodology is more precise, more friendly with the original data structure, and offers better clustering results.
 
@@ -201,24 +246,6 @@ The vars.to.regress parameter allows to regress out certain variables, preventin
 run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt", seed.use = NULL)
 ```
 
-### 2.6. Visualizing QC parameters after normalization.
-
-After filtering and normalization we can see that the distribution of mitochondrial DNA improves a bit, and the ration between counts and features is closer to a linear function.
-
-Another thing that don't make sense is the long upper tails of the features and counts distribution. Maybe is possible to apply a more strict cut, but we have to remember we have a low number of cells and there is more data yet to be added.
-
-```{r QC_norm, fig.height=6, fig.width=10}
-# Visualize QC metrics as a violin plot
-VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
-
-# Zoom in on nCount_RNA violin plot.
-VlnPlot(run1.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
-
-# Visualize relationships in metadata to detect outliers with FeatureScatter function
-plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-plot1 + plot2
-```
 
 ## 4. Linear dimensional reduction (PCA).
 

@@ -66,8 +66,6 @@ We will use the raw data in order to visualize QC parameters.
 
 ```{r mito_genes}
 run4.raw[["percent.mt"]] <- PercentageFeatureSet(run4.raw, pattern = "^MT-")
-
-run4.raw[["percent.mt"]][1:5, ]
 ```
 
 ### 2.2. QC visualization.
