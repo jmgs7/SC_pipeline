@@ -90,7 +90,7 @@ It is necessary to either obtain the correct count matrix or elucidate how the p
 
 UPDATE: Since we know how to introduced the missing information into the raw matrix, we will use our own analysis form now on.
 
-## 2. QC.
+### 1.1. Import raw data.
 
 We will use the raw data in order to visualize QC parameters.
 
@@ -98,6 +98,33 @@ We will use the raw data in order to visualize QC parameters.
 run1.raw <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat.rds")
 run1.raw
 ```
+
+### 1.2. Adding sample names and sample groups.
+
+```{r}
+
+# Load information from .ods file
+excel_data <- read_ods("~/Documents/SC_Prostate/Data/sample_info.ods")
+
+# Specify the experiment you want to extract information for
+target_run <- "run1"
+
+# Filter Excel data for the specific experiment
+filtered_excel_data <- excel_data %>%
+  filter(Run == target_run)
+
+# Extract the numeric part from Sample Tag and convert it to integer
+run1.raw$Sample_Tag_Number <- as.integer(gsub("\\D", "", run1.raw$Sample_Tag))
+
+# Extract Sample Name and Sample Group based on Sample Tag information
+run1.raw$Sample_Name <- filtered_excel_data$Sample_Name[match(run1.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+
+run1.raw$Sample_Group <- filtered_excel_data$Sample_Group[match(run1.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+
+run1.raw$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run1.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+```
+
+## 2. QC.
 
 ### 2.1. Mitochondrial gene percentage calculation.
 
@@ -114,6 +141,7 @@ We can appreciate that the sample preprocessing done by the sequencing systems h
 The plotting of the % mitochondrial genes against read count shows a very disperse distribution, while the slope between counts and features is quasi linear.
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
+
 # Visualize QC metrics as a violin plot
 VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
@@ -128,10 +156,21 @@ plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.m
 plot2 <- FeatureScatterGradient(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
 plot1 + plot2
 ```
+#### 2.2.1 Per-sample QC visualization.
+
+In order to better assess the quality of each individual samples and identify problematic samples, we also explore the QC metrics on each sample.
+
+```{r sample_QC, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
+
+```
+
 
 ### 2.3. Filtering cells.
 
-#### A. Filtering 1 % top and bottom percentiles.
+#### Filtering 1 % top and bottom percentiles.
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
@@ -189,45 +228,22 @@ plot2 <- FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 =
 plot1 + plot2
 ```
 
-We need to perform an additional filtering step to remove a group of low feature and read count cells.
+We need to perform an additional filtering step to remove a group of low feature and read count cells. UPDATE: Because it appears in all batches and it is clustered independently in the merged analysis, we will conseve it and study its cell composition.
 
 ```{r additional_trimming}
 
 # Trim out the low-feature low-count cell group.
-run1.subset <- subset(run1.subset, subset = nFeature_RNA > 1000)
+# run1.subset <- subset(run1.subset, subset = nFeature_RNA > 1000)
 
-run1.subset
+# run1.subset
 ```
 
 ```{r trimming_check}
 
-FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+# FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
 ```
 
-### 2.5. Adding sample names and sample groups.
-
-```{r}
-
-# Load information from .ods file
-excel_data <- read_ods("~/Documents/SC_Prostate/Data/sample_info.ods")
-
-# Specify the experiment you want to extract information for
-target_run <- "run1"
-
-# Filter Excel data for the specific experiment
-filtered_excel_data <- excel_data %>%
-  filter(Run == target_run)
-
-# Extract the numeric part from Sample Tag and convert it to integer
-run1.subset$Sample_Tag_Number <- as.integer(gsub("\\D", "", run1.subset$Sample_Tag))
-
-# Extract Sample Name and Sample Group based on Sample Tag information
-run1.subset$Sample_Name <- filtered_excel_data$Sample_Name[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-
-run1.subset$Sample_Group <- filtered_excel_data$Sample_Group[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-
-run1.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run1.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-```
+Save filtered data.
 
 ```{r saving_filtered_data, include = FALSE, echo = FALSE}
 
@@ -235,7 +251,7 @@ run1.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run
 saveRDS(run1.subset, file = "~/Documents/SC_Prostate/Data/run1/run1_filtered.rds")
 ```
 
-### 2.6. Normalization using SCTransform.
+## 3. Normalization using SCTransform.
 
 We normalize data using the new SCTransform methodology. This methodology is more precise, more friendly with the original data structure, and offers better clustering results.
 
