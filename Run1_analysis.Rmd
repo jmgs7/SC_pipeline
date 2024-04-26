@@ -134,7 +134,6 @@ In order to better assess the quality of each individual samples and identify pr
 
 # Visualize QC metrics as a violin plot
 VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
-
 ```
 
 ```{r}

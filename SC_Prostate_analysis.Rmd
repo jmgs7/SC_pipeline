@@ -51,6 +51,9 @@ library(glmGamPoi)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
+
+# Import user's libraries.
+source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
 ```
 
 # 1. Load filtered run data.
@@ -116,6 +119,39 @@ Saving raw merged data:
 saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 ```
 
+# 3. Visualization of QC metrics.
+
+Checking the QC metrics of the combine dataset.
+
+```{r QC_visualization, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(SCP_data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(SCP_data, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+
+# Zoom in on nCount_RNA violin plot.
+VlnPlot(SCP_data, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend()
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatterGradient(SCP_data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100, scale.colors = "viridis")
+plot1 + plot2
+```
+
+Visualizing metrics by sample:
+
+```{r sample_QC, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(SCP_data, features = "nFeature_RNA", group.by = "Sample_Name") + NoLegend()
+VlnPlot(SCP_data, features = "nCount_RNA", group.by = "Sample_Name") + NoLegend()
+VlnPlot(SCP_data, features = "percent.mt", group.by = "Sample_Name") + NoLegend()
+```
+
+Apparently, run2 and run4 have higher minimum counts than run1 and run3. This could led to batch effect that will be corrected in later steps. Despite this, samples and run appear to have a pretty similar distribution of QC metrics.
+
 # 3. Normalize and check batch effect.
 
 Batch effect is considered the presence of certain unique characteristics within a specific dataset that make it differentiable from the rest when merging all the data. As we are merging data from different runs, variations in the samples processing and further cell manipulation and sequencing could induce those batch effect.
@@ -127,8 +163,6 @@ PCA plotting of the first two PC shows that the different runs are not separated
 ```{r batch_effect, fig.height=6, fig.width=10}
 
 # Launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
-# No vars.to.regress.
-# ncells=Inf
 
 SCP_data <- SCTransform(SCP_data, vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident"))
 SCP_data <- RunPCA(SCP_data, assay = "SCT")
@@ -202,7 +236,9 @@ Cluster QC shows homogeneous characteristics across the clusters with the except
 ```{r cluster_QC, fig.height=6, fig.width=10}
 
 # Visualize QC metrics as a violin plot
-VlnPlot(SCP_data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+VlnPlot(SCP_data, features = "nFeature_RNA") + NoLegend()
+VlnPlot(SCP_data, features = "nCount_RNA") + NoLegend()
+VlnPlot(SCP_data, features = "percent.mt") + NoLegend()
 
 # Zoom in on nFeature_RNA violin plot.
 VlnPlot(SCP_data, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
@@ -291,160 +327,6 @@ DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4
 
 saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
 ```
-
-# 6. Exploratory analysis.
-
-Here, we start the more deep and accurate analysis of the dataset.
-
-```{r load_processed_data, include = FALSE}
-
-# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
-```
-
-## 6.1. Finding cluster enriched in T samples.
-
-First, we would take a look at the proportion of cells from the different groups (T, N, NAT and AT) on each cluster.
-
-For that we will plot the frequency of each sample on each cluster (that is, the fraction of the total cells of that given type present on each cluster).
-
-```{r T_enrichment_calc, fig.height=40, fig.width=10}
-
-# Sumarize() performs an operation over a row of a dataframe, for example mean() or count n().
-
-# Slots are dataframes, so it can be used by dplyr.
-prop_cell_by_sample <- SCP_data@meta.data %>% group_by(Sample_Name, cell.cluster.labels) %>% 
-  summarise(n = n()) %>% # For each cluster, group the cells from the same sample together and count them.
-  ungroup() %>% group_by(Sample_Name) %>%
-  mutate(freq = n / sum(n)) %>% # Group them now by sample, add up the total number of cells from that sample (regardless of the cluster they belong to). Then, divide each n value (number of cells of a sample in a certain cluster), obtaining which fraction of the total cells of that given type is present on each cluster.
-  left_join(SCP_data@meta.data %>% select(Sample_Name, Sample_Group) %>% unique()) # Add metadata info available for the data, select only the Sample_Name and Sample_Group fields and delete duplicates.
-
-# In the plotting, whe separate the data on each cluster by the Sample Group, so we represent the frequency of each sample (sample_name) belonging to a certain sample_group and we calculate the statistics using this grouping method.
-
-ggplot(prop_cell_by_sample, aes(x = Sample_Group, y = freq))+
-  facet_wrap(~cell.cluster.labels, scales = "free", nrow = 12)+
-  geom_boxplot(aes(fill = Sample_Group), outlier.shape = NA, alpha = 0.5)+
-  geom_jitter(aes(color = Sample_Group)) +
-  theme_minimal()+
-  theme(legend.position = "none")
-```
-
-For now, will be only focus on comparing the confirmed tumoral (T) and healthy (N) samples.
-
-```{r boxplot, fig.height=40, fig.width=10}
-
-# Filter only the desired groups "N" and "T"
-prop_cell_by_sample_filtered <- prop_cell_by_sample %>%
-  filter(Sample_Group %in% c("N", "T"))
-
-# Plot only the desired groups
-ggplot(prop_cell_by_sample_filtered, aes(x = Sample_Group, y = freq)) +
-  facet_wrap(~cell.cluster.labels, scales = "free", nrow = 12) +
-  geom_boxplot(aes(fill = Sample_Group), outlier.shape = NA, alpha = 0.5) +
-  geom_jitter(aes(color = Sample_Group)) +
-  theme_minimal() + theme(legend.position = "none")
-```
-
-We apply the Wilcoxon test to find out significant differences between sample groups. We found out that the cluster 18 (annotated as endothelial cells) is the only group with a significant enrichment in tumoral cells.
-
-```{r}
-
-# Extract data for Sample_Group "T" and other groups
-
-group_T <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "T", ]
-group_N <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "N", ]
-
-# Perform t-test for each cluster
-clusters <- levels(prop_cell_by_sample$cell.cluster.labels)
-p_values <- numeric(length(clusters))
-
-for (i in seq_along(clusters)) {
-  
-  cluster_data_T <- group_T[group_T$cell.cluster.labels == clusters[i], "freq"] 
-  
-  cluster_data_N <- group_N[group_N$cell.cluster.labels == clusters[i], "freq"]
-
-  # Perform test 
-  test_result <- wilcox.test(cluster_data_T$freq, cluster_data_N$freq)
-
-  # Store p-value 
-  p_values[i] <- test_result$p.value 
-  
-  }
-
-# Identify clusters with significant enrichment (e.g., p-value < 0.05)
-
-enriched_clusters <- clusters[p_values < 0.05]
-
-# Print or visualize the enriched clusters
-
-print(enriched_clusters) 
-print(p_values)
-```
-
-We plot the results along the statistics in a paper-ready figure.
-
-```{r boxplot_publish, fig.height=20, fig.width=15}
-
-# Plot only the desired groups
-enriched_clusters <- ggboxplot(prop_cell_by_sample_filtered, x = "Sample_Group", y = "freq",
-          color = "Sample_Group",  palette = "jco",
-          add = "jitter") +
-facet_wrap(~cell.cluster.labels, scales = "free", nrow = 6) +
-theme(legend.position = "none") +
-xlab("Sample Group") + ylab("Frequency") +
-stat_compare_means(aes(label = ..p.signif..), label.x = 1.5)
-
-enriched_clusters
-```
-
-### 6.1.1. Finding differentially expressed genes in tumoral-enriched clusters.
-
-We will now perform a DE analysis on cluster 18 by comparing cells coming from T samples (tumoral) vs healthy samples (N).
-
-Results are storaged as an tsv file for further exploration and a vulcan plot showing significant genes colored is provided. Top 10 up- and down-regulated genes by p-value are labeled.
-
-```{r DE_analysis}
-  
-cluster18.markers <- FindMarkers(SCP_data, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-Endothelial_cells", assay = "SCT")
-```
-
-```{r vulcan_plot, fig.height=6, fig.width=10}
- 
-FC = log2(1.5) # Set FC threshold.
-
-# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative).
-cluster18.markers$diffexpressed <- "NO"
-# if FC > 1.5 (log2FC > ~0.6) and pvalue < 0.05, set as "UP".
-cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC > FC & cluster18.markers$p_val < 0.05] <- "UP"
-# if FC < 0.666 (invers 1/1.5 calculated as log2FC < ~-0.6) and pvalue < 0.05, set as "DOWN".
-cluster18.markers$diffexpressed[cluster18.markers$avg_log2FC < -FC & cluster18.markers$p_val < 0.05] <- "DOWN"
-
-# Save to csv.
-write.csv(cluster18.markers, "~/Documents/SC_Prostate/Output/diffexp_cluster18.csv", row.names = TRUE)
-
-cluster18.markers <- cluster18.markers %>%
-  arrange(p_val) %>%
-  mutate(gene_symbol = rownames(.)) %>%
-  group_by(diffexpressed) %>%
-  mutate(delabel = if_else(diffexpressed %in% c("UP", "DOWN") & row_number() <= 10, gene_symbol, NA)) %>%
-  ungroup()
-
-ggplot(cluster18.markers, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpressed, label = delabel)) +
-  geom_vline(xintercept = c(-FC, FC), col = "grey", linetype = 'dashed') +
-  geom_hline(yintercept = -log10(0.05), col = "grey", linetype = 'dashed') +
-  geom_point(size = 2) +
-  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), # to set the colours of our variable
-                     labels = c("Downregulated", "Not significant", "Upregulated")) + # to set the labels in case we want to overwrite the categories from the dataframe (UP, DOWN, NO)
-  labs(color = NULL, #legend_title,
-       x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
-  theme_classic() +
-  scale_x_continuous(breaks = seq(-10, 10, 2)) + # to customise the breaks in the x axis
-  geom_text_repel(box.padding = 0.6, max.overlaps = Inf) # To show all labels
-```
-
-## 6.2. Merging AT cells to T groups.
-
-In order to increase the number of available cells in the dataset, we will implement a method for checking the similarity between an AT cell and the overall gene expression profile of the T group.
 
 Session Info.
 

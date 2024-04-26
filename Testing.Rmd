@@ -50,6 +50,8 @@ library(readODS) # Allows ods file import to add sample info
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
+# Adjust memory allocation per process.
+options(future.globals.maxSize = 2000 * 1024^2) # 2 GB per thread.
 ```
 
 # 1. Intro: There is actually batch effect.
@@ -80,16 +82,24 @@ As we can see in the image, cluster 4 and cluster 15 is composed exclusively of 
 clusters <- levels(SCP_data$seurat_clusters)
 df <- data.frame()
 for(i in 1:length(clusters)){
-  if (clusters[i] != "4" & clusters[i] != "15") {
-      cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clustect with cell metadata (colData) columnsrs == clusters[i]) %>% .$orig.ident %>% table() /
-  table(SCP_data$orig.ident))
-
-  cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
-
-  cur_df$cluster <- clusters[i]
-  df <- rbind(df, cur_df)
+  if (clusters[i] != 4 & clusters[i] != 14)  {
+        cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clusters == clusters[i]) %>% .$orig.ident %>% table() /
+    table(SCP_data$orig.ident))
+  
+    cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+  
+    cur_df$cluster <- clusters[i]
+    df <- rbind(df, cur_df)
+  } else {
+    cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clusters == clusters[i]) %>% .$orig.ident %>% table())
+  
+    cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+  
+    cur_df$cluster <- clusters[i]
+    df <- rbind(df, cur_df)
   }
 }
+
 
 RunFreq.noInt <- ggplot(df, aes(y=Freq, x=cluster, fill=.)) +
   geom_bar(stat='identity') +
@@ -106,6 +116,7 @@ RunFreq.noInt <- ggplot(df, aes(y=Freq, x=cluster, fill=.)) +
   )
 RunFreq.noInt
 ```
+
 We also re-visualize the PCA plot:
 
 ```{r fig.height=6, fig.width=10}
@@ -131,7 +142,7 @@ SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
 
 # 2.1. Normalize and apply data integration.
 
-It is necessary to normalize the data before integration. Accordin to mantainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
+It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
 
 Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
 
@@ -159,7 +170,7 @@ SCP_data <- IntegrateLayers(
 )
 ```
 
-There are several methods for integration, but according to some sources (https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1850-9), the best ones are Harmony, Seurat's CCA and scVII (requires setting up a conda environment and installing reticulate, see documentation). We choose Harmony for being well-integrated with Seruat, and performing pretty well with low computational effort.
+There are several methods for integration, but according to some sources (https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1850-9), the best ones are Harmony, Seurat's CCA and scVII (requires setting up a conda environment and installing reticulate, see documentation). We choose Harmony for being well-integrated with Seruat, performing pretty well with low computational effort, and better respecting the data original structure when compared against Seurat's CCA.
 
 If we re-visualize the PCA plot, we appreciate a bigger overlap between runs.
 
@@ -239,7 +250,7 @@ for(i in 1:length(clusters)){
 
   cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
 
-  cur_df$cluster <- clusters[i]
+  cur_df$cluster <- clust 	118 	ers[i]
   df <- rbind(df, cur_df)
 }
 
