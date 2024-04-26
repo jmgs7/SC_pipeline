@@ -1,5 +1,5 @@
 ---
-title: "Run2_analysis"
+title: "run2_analysis"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
 output: # html_notebook
@@ -33,7 +33,7 @@ knitr::opts_chunk$set(
 
 # SC_Prostate_Run_2 analysis.
 
-Analyiis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering.
+Analysis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada). SC data was generated and pre-analysed sing BD Rhapsody systems and Illumina sequencers. BD includes pipelines for read mapping and putative cell filtering. An analysis using the Seurat package (<https://satijalab.org/seurat/>) was done by the CSIC staff using the seven bridges platform, but an obsolete normalization method was used. This R markdown file describes a preliminary analysis for the first of the four runs the project contains.
 
 ```{r libraries, include = FALSE}
 library(Seurat)
@@ -46,28 +46,59 @@ library(SingleR) # Cell annotation.
 library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
+library(scDblFinder)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
+
+# Import user's libraries.
+source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
 ```
 
-## 1. Import data and exploratory analysis.
+## 1. Import raw data.
+
+We will use the raw data in order to visualize QC parameters.
 
 ```{r import_raw_data}
+
 run2.raw <- readRDS("~/Documents/SC_Prostate/Data/run2/C2_expected.rds")
+run2.raw$orig.ident <- "run2"
+run2.raw <- SetIdent(run2.raw, value = run2.raw$orig.ident)
 run2.raw
+```
+
+### 1.1. Adding sample names and sample groups.
+
+```{r}
+
+# Load information from .ods file
+excel_data <- read_ods("~/Documents/SC_Prostate/Data/sample_info.ods")
+
+# Specify the experiment you want to extract information for
+target_run <- "run2"
+
+# Filter Excel data for the specific experiment
+filtered_excel_data <- excel_data %>%
+  filter(Run == target_run)
+
+# Extract the numeric part from Sample Tag and convert it to integer
+run2.raw$Sample_Tag_Number <- as.integer(gsub("\\D", "", run2.raw$Sample_Tag))
+
+# Extract Sample Name and Sample Group based on Sample Tag information
+run2.raw$Sample_Name <- filtered_excel_data$Sample_Name[match(run2.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+
+run2.raw$Sample_Group <- filtered_excel_data$Sample_Group[match(run2.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
+
+run2.raw$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run2.raw$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
 ```
 
 ## 2. QC.
 
-We will use the raw data in order to visualize QC parameters.
-
 ### 2.1. Mitochondrial gene percentage calculation.
 
 ```{r mito_genes}
-run2.raw[["percent.mt"]] <- PercentageFeatureSet(run2.raw, pattern = "^MT-")
 
-run2.raw[["percent.mt"]][1:5, ]
+run2.raw[["percent.mt"]] <- PercentageFeatureSet(run2.raw, pattern = "^MT-")
 ```
 
 ### 2.2. QC visualization.
@@ -79,6 +110,7 @@ We can appreciate that the sample preprocessing done by the sequencing systems h
 The plotting of the % mitochondrial genes against read count shows a very disperse distribution, while the slope between counts and features is quasi linear.
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
+
 # Visualize QC metrics as a violin plot
 VlnPlot(run2.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
@@ -90,19 +122,61 @@ VlnPlot(run2.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run2.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run2.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2 <- FeatureScatterGradient(run2.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100, scale.colors = "viridis")
 plot1 + plot2
+```
+
+#### 2.2.1 Per-sample QC visualization.
+
+In order to better assess the quality of each individual samples and identify problematic samples, we also explore the QC metrics on each sample.
+
+```{r sample_QC, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(run2.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
+
+```
+
+```{r}
+
+# Convert Seurat object into a SingleCellExperiment Object for scDblFinder input.
+run2.sce <- as.SingleCellExperiment(run2.raw)
+
+# Getting known doublets for adjusting the threshold.
+knownDoublets <- run2.raw$Sample_Tag=="Multiplet"
+
+# Load doublet rate and rate error:
+BDstats <- readRDS("~/Documents/SC_Prostate/Data/BDstats.rds")
+
+# Set seed for reproducible results with scDblFinder.
+set.seed(0)
+
+# Run scDblFinder. Params:
+# dbr: The expected doublet rate. We use the output from BD Rapshody for each run.
+# dbr.sc: Uncertainty of the doublet rate. We are based on ground truth so we set it to 0.
+# knownDoublets & knownUse: The known doublets and how to use it. We use it for training.
+run2.sce <- scDblFinder(run2.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=detectCores()))
+
+table(truth=run2.sce$Sample_Tag, call=run2.sce$scDblFinder.class)
+
+run2.raw <- as.Seurat(run2.sce, counts = "counts", data = "logcounts", project = "run2")
+run2.raw$ident <- NULL
 ```
 
 ### 2.3. Filtering cells.
 
-#### A. Filtering 1 % top and bottom percentiles.
+#### Filtering 1 % top and bottom percentiles.
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
+We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we prefer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
+
+UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
+
 ```{r filtering_percentiles}
+
 # Remove Undetermined and multiplets.
-run2.subset <- subset(run2.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
+run2.subset <- subset(run2.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet" & scDblFinder.class != "doublet")
 
 # Filter the 1% top and bottom percentiles.
 minCov <- 1000 # if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good.
@@ -121,55 +195,13 @@ run2.subset <- subset(run2.subset, subset = nFeature_RNA > featureLOW & nFeature
 run2.subset
 ```
 
-### 2.4. Adding sample names and sample groups.
+### 2.4. Visualizing QC parameters after filtering.
 
-```{r}
-
-# Load information from .ods file
-excel_data <- read_ods("~/Documents/SC_Prostate/Data/sample_info.ods")
-
-# Specify the experiment you want to extract information for
-target_run <- "run2"
-
-# Filter Excel data for the specific experiment
-filtered_excel_data <- excel_data %>%
-  filter(Run == target_run)
-
-# Extract the numeric part from Sample Tag and convert it to integer
-run2.subset$Sample_Tag_Number <- as.integer(gsub("\\D", "", run2.subset$Sample_Tag))
-
-# Extract Sample Name and Sample Group based on Sample Tag information
-run2.subset$Sample_Name <- filtered_excel_data$Sample_Name[match(run2.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-
-run2.subset$Sample_Group <- filtered_excel_data$Sample_Group[match(run2.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-
-run2.subset$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run2.subset$Sample_Tag_Number, filtered_excel_data$Sample_Tag)]
-```
-
-```{r saving_filtered_data, include = FALSE, echo = FALSE}
-
-# Save filtered file for data merging.
-saveRDS(run2.subset, file = "~/Documents/SC_Prostate/Data/run2/run2_filtered.rds")
-```
-
-### 2.5. Normalization using SCTransform.
-
-We normalize data using the new SCTransform methodology. This methodology is more precise, more friendly with the original data structure, and offers better clustering results.
-
-The vars.to.regress parameter allows to regress out certain variables, preventing them to have a high impact on PCA dimension reduction and further clustering of samples.
-
-```{r SCTransform}
-
-run2.subset <- SCTransform(run2.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
-```
-
-### 2.6. Visualizing QC parameters after normalization.
-
-After filtering and normalization we can see that the distribution of mitochondrial DNA improves a bit, and the ration between counts and features is closer to a linear function.
+After filtering we can see that the distribution of mitochondrial DNA improves a bit, and the ration between counts and features is closer to a linear function.
 
 Another thing that don't make sense is the long upper tails of the features and counts distribution. Maybe is possible to apply a more strict cut, but we have to remember we have a low number of cells and there is more data yet to be added.
 
-```{r QC_norm, fig.height=6, fig.width=10}
+```{r QC_filter, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
 VlnPlot(run2.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
@@ -178,8 +210,59 @@ VlnPlot(run2.subset, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500)
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run2.subset, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatter(run2.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2 <- FeatureScatterGradient(run2.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
 plot1 + plot2
+```
+
+We can appreciate that after these QC steps samples present very homogeneous QC metrics:
+
+```{r sample_post_QC, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(run2.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
+```
+
+These QC thresholds allow us to equalize QC metrics across samples, improve the correlation between feature count and read depth, trim out dead cells, remove additional undected multiplets and undetermined cells and maximize conservation of cell number.
+
+```{r before and after, fig.height=6, fig.width=10}
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatterGradient(run2.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot2 <- FeatureScatterGradient(run2.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot1 + plot2
+```
+
+We need to perform an additional filtering step to remove a group of low feature and read count cells. UPDATE: Because it appears in all batches and it is clustered independently in the merged analysis, we will conseve it and study its cell composition.
+
+```{r additional_trimming}
+
+# Trim out the low-feature low-count cell group.
+# run2.subset <- subset(run2.subset, subset = nFeature_RNA > 1000)
+
+# run2.subset
+```
+
+```{r trimming_check}
+
+# FeatureScatterGradient(run2.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+```
+
+Save filtered data.
+
+```{r saving_filtered_data, include = FALSE, echo = FALSE}
+
+# Save filtered file for data merging.
+saveRDS(run2.subset, file = "~/Documents/SC_Prostate/Data/run2/run2_filtered.rds")
+```
+
+## 3. Normalization using SCTransform.
+
+We normalize data using the new SCTransform methodology. This methodology is more precise, more friendly with the original data structure, and offers better clustering results.
+
+The vars.to.regress parameter allows to regress out certain variables, preventing them to have a high impact on PCA dimension reduction and further clustering of samples.
+
+```{r SCTransform}
+
+run2.subset <- SCTransform(run2.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
 ```
 
 ## 4. Linear dimensional reduction (PCA).
@@ -194,8 +277,6 @@ DimPlot(run2.subset, reduction = "pca") + NoLegend() # An unique PCA is not enou
 ElbowPlot(run2.subset, ndims = 50)
 ```
 
-In normal circumstances, a selection of the first 10 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
-
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
 DimHeatmap(run2.subset, dims = 1:30, balanced = TRUE)
 ```
@@ -204,9 +285,9 @@ DimHeatmap(run2.subset, dims = 1:30, balanced = TRUE)
 VizDimLoadings(run2.subset, dims = 1:30, reduction = "pca")
 ```
 
-## 5. Clustering.
+## 5. Clustering
 
-### 5.1. Cluster computation.
+In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
 
 ```{r clustering}
 # Resolution fine-tuned in a separate Rmd.
@@ -219,9 +300,9 @@ run2.subset <- RunUMAP(run2.subset, dims = 1:30)
 DimPlot(run2.subset, reduction = "umap", label = TRUE)
 ```
 
-### 5.2. Cluster QC.
+Cluster QC.
 
-As we can observe, the data structure is conditioned by the abundant presence of mitochondrial DNA. Taking into account the cluster with less % of mitochondrial DNA, cluster 17, we appreciate how the lower content in mitochondrial material correlates with lower feature and read counts. On the other hand, if we compare the distritrubution of mitoDNA of each cluster with the feature and count distribution, we can see a clear similarity.
+As we can observe, the data structure is conditioned by the abundant presence of mitochondrial DNA. Taking into account the 2 clusters with less % of mitochondrial DNA, clusters 14 and 15, we appreciate how the lower content in mitochondrial material correlates with lower feature and read counts. On the other hand, if we compare the distritrubution of mitoDNA of each cluster with the feature and count distribution, we can see a clear similarity.
 
 Thus, mitochondrial DNA is shaping the data, and probably conditioning the cell annotation and further analysis.
 
@@ -312,6 +393,13 @@ DimPlot(run2.subset, reduction = "umap", label = TRUE, repel = TRUE, label.size 
 
 ```{r saving_data, include = FALSE, echo = FALSE}
 
-# Save fully-proccesed data.
+# Save filtered file for data merging.
 saveRDS(run2.subset, file = "~/Documents/SC_Prostate/Output/run2/run2_processed.rds")
+```
+
+Session info.
+
+```{r session_info}
+
+sessionInfo()
 ```

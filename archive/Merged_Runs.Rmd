@@ -47,6 +47,7 @@ library(SingleR) # Cell annotation.
 library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
+library(glmGamPoi)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
@@ -126,6 +127,9 @@ PCA plotting of the first two PC shows that the different runs are not separated
 ```{r batch_effect, fig.height=6, fig.width=10}
 
 # Launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
+# No vars.to.regress.
+# ncells=Inf
+
 SCP_data <- SCTransform(SCP_data, vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident"))
 SCP_data <- RunPCA(SCP_data, assay = "SCT")
 
@@ -405,7 +409,7 @@ cluster18.markers <- FindMarkers(SCP_data, ident.1 = "T", ident.2 = "N", group.b
 ```
 
 ```{r vulcan_plot, fig.height=6, fig.width=10}
-
+ 
 FC = log2(1.5) # Set FC threshold.
 
 # Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative).

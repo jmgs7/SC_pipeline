@@ -1,0 +1,131 @@
+---
+title: "Estimated doublet rate"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: # html_notebook
+---
+
+```{r setup, include=FALSE}
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries, include = FALSE}
+
+library(dplyr)
+library(patchwork)
+library(ggpubr)
+library(ggplot2)
+library(readODS) # Allows ods file import to add sample info
+```
+
+## 1. Import data from BD Rapshody documentation.
+
+The multiplets rates where obtain from the BD Rhapsody™ Single-Cell Analysis System Instrument User Guide version 23-21336(04) (page 33) (https://scomix.bd.com/hc/en-us/articles/360023044392-Instrument-Guides). Direct download: https://scomix.bd.com/hc/article_attachments/13726657160717
+
+```{r}
+
+BDdata <- read_ods("~/Documents/SC_Prostate/Data/BD Rhapsody expected multiplate rate.ods")
+BDdata
+```
+
+## 2. Transform data for linear regression.
+
+The estimated error rate is requested by some packages like scDblFinder as the multiplet rate per 1K cells. That is, a value that allows to estimate the multiplet error in function of quantity of cells by thousands.
+
+For that, we need to apply some simple transformations in our data.
+
+```{r}
+
+# Changing column names for easy management.
+names(BDdata) <- c("ncells", "multipletRate")
+
+# Converting de number of cells to K number of cells and the multiplet rate from percentage to proportion.
+BDdata$ncells <- BDdata$ncells/1000
+BDdata$multipletRate <- BDdata$multipletRate/100
+
+```
+
+
+## 3. Linear regression.
+
+To obtain the estimated multiplet rate per 1K cells of the system, we have to perform a lineal regression over the data provided by BD.
+
+With this method we also obtain the adjusted R² and p-value of the model, the estimated multiplet rate per 1K cells and the uncertainty of the rate (we consider it to be the standard error of the slope from the adjustment. Because the intersection is rather small, we ignore it).
+
+```{r}
+
+linearRegression = lm(multipletRate~ncells, data = BDdata)
+regressionStats <- summary(linearRegression)
+
+regressionStats
+```
+
+The values we are looking for are:
+
+```{r}
+
+regressionCoefficients <- regressionStats$coefficients
+
+estDblRate <- regressionCoefficients["ncells", 1]
+stdError <- regressionCoefficients["ncells", 2]
+p.value <- regressionCoefficients["ncells", 4]
+```
+
+```{r}
+cat("The estimated multiplet rate per 1K cells is", estDblRate, "\n")
+cat("The uncertainty of the estimation is", stdError, "\n")
+cat("The p-value of the ajustment is", p.value, "\n")
+ 
+```
+
+Here is a plot the data, regression model and stats:
+
+```{r}
+
+label <- (text="italic(y)~`=`~5.7%*%10^-05 + 0.0024*italic(x)~~~~italic(R)[adj]^2~`=`~0.9996~~~~italic(p)~`=`~1.45%*%10^-35~~~~italic(SE)~`=`~1.04%*%10^-05")
+
+ggplot(data = BDdata, mapping = aes(x = ncells, y = multipletRate)) +
+  geom_point(size = 2) +
+  stat_smooth(method = lm, lwd = 0.25, color = "red") +
+  stat_regline_equation(aes(label =  label), method = lm) +
+  xlab("Number of cells (x 1000)") + ylab("Multiplet proportion") +
+  theme_classic()
+```
+
+We store the model and stats for future use:
+
+```{r}
+
+# Save the model
+saveRDS(linearRegression, file = "~/Documents/SC_Prostate/Data/estDblRate_model.rds")
+```
+
+```{r}
+
+# Filter out useless stats.
+BDstats <- regressionCoefficients["ncells", 1:2]
+saveRDS(BDstats, file = "~/Documents/SC_Prostate/Data/BDstats.rds")
+```
+

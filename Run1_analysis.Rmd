@@ -46,6 +46,7 @@ library(SingleR) # Cell annotation.
 library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
+library(scDblFinder)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
 plan("multicore", workers = detectCores())
@@ -54,52 +55,19 @@ plan("multicore", workers = detectCores())
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
 ```
 
-## 1. Import data and exploratory analysis.
-
-Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada).
-
-These data contains raw counts and a previously normalized dataset. Nevertheless, we re-run the normalization using the new SCTransform method.
-
-```{r import_data}
-# run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
-# run1 # Show information about the Seurat object.
-```
-
-```{r}
-
-# rm(run1)
-```
-
-Data from run1 contained 3809 cells originally . After eliminating cells tagged (they are label at `run1@metadata[["Sample_Tag"]])`\` as "undetermined" (no UMIs) or "multiplet" (droplets with more than 1 cell), 3118 cells remained. Next, 3 criteria was followed in order to filter the cells:
-
--   Cells with less than 7846.18 genes.
-
--   Cells with more than 91.585 genes.
-
--   Cells with a percentage of mitochondrial genes lower than 25%.
-
-After those filters, the 2151 cells reported by the command above remained.
-
-Problem is, apart from the fact the use of float values for the number of genes is sort of confusing, we don't have any kind of information about the methodology followed to obtain these values.
-
-By using our own data-driven method (removal of the top and bottom 1% percentiles of cells by their number of genes and cells with more than 25% of mitochondrial genes) we obtain very close results, with 2135 cells kept after the filtering.
-
-Nevertheless, as the raw count matrix provided is lacking some essential information such as the cells' sample and group, is not possible to follow this approach and we depend on the CSIC staff's pre-analysed data.
-
-It is necessary to either obtain the correct count matrix or elucidate how the previous data processing was performed.
-
-UPDATE: Since we know how to introduced the missing information into the raw matrix, we will use our own analysis form now on.
-
-### 1.1. Import raw data.
+## 1. Import raw data.
 
 We will use the raw data in order to visualize QC parameters.
 
 ```{r import_raw_data}
+
 run1.raw <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat.rds")
+run1.raw$orig.ident <- "run1"
+run1.raw <- SetIdent(run1.raw, value = run1.raw$orig.ident)
 run1.raw
 ```
 
-### 1.2. Adding sample names and sample groups.
+### 1.1. Adding sample names and sample groups.
 
 ```{r}
 
@@ -129,6 +97,7 @@ run1.raw$Sample_Name_Group <- filtered_excel_data$Sample_Name_Group[match(run1.r
 ### 2.1. Mitochondrial gene percentage calculation.
 
 ```{r mito_genes}
+
 run1.raw[["percent.mt"]] <- PercentageFeatureSet(run1.raw, pattern = "^MT-")
 ```
 
@@ -153,9 +122,10 @@ VlnPlot(run1.raw, features = "nCount_RNA", ncol = 1) + ylim(0, 25000) + NoLegend
 
 # Visualize relationships in metadata to detect outliers with FeatureScatter function
 plot1 <- FeatureScatter(run1.raw, feature1 = "nCount_RNA", feature2 = "percent.mt")
-plot2 <- FeatureScatterGradient(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
+plot2 <- FeatureScatterGradient(run1.raw, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100, scale.colors = "viridis")
 plot1 + plot2
 ```
+
 #### 2.2.1 Per-sample QC visualization.
 
 In order to better assess the quality of each individual samples and identify problematic samples, we also explore the QC metrics on each sample.
@@ -167,6 +137,31 @@ VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol
 
 ```
 
+```{r}
+
+# Convert Seurat object into a SingleCellExperiment Object for scDblFinder input.
+run1.sce <- as.SingleCellExperiment(run1.raw)
+
+# Getting known doublets for adjusting the threshold.
+knownDoublets <- run1.raw$Sample_Tag=="Multiplet"
+
+# Load doublet rate and rate error:
+BDstats <- readRDS("~/Documents/SC_Prostate/Data/BDstats.rds")
+
+# Set seed for reproducible results with scDblFinder.
+set.seed(0)
+
+# Run scDblFinder. Params:
+# dbr: The expected doublet rate. We use the output from BD Rapshody for each run.
+# dbr.sc: Uncertainty of the doublet rate. We are based on ground truth so we set it to 0.
+# knownDoublets & knownUse: The known doublets and how to use it. We use it for training.
+run1.sce <- scDblFinder(run1.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=detectCores()))
+
+table(truth=run1.sce$Sample_Tag, call=run1.sce$scDblFinder.class)
+
+run1.raw <- as.Seurat(run1.sce, counts = "counts", data = "logcounts", project = "run1")
+run1.raw$ident <- NULL
+```
 
 ### 2.3. Filtering cells.
 
@@ -174,14 +169,14 @@ VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
-We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we preffer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
+We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we prefer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
 
 UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
 
 ```{r filtering_percentiles}
 
 # Remove Undetermined and multiplets.
-run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet")
+run1.subset <- subset(run1.raw, Sample_Tag != "Undetermined" & Sample_Tag != "Multiplet" & scDblFinder.class != "doublet")
 
 # Filter the 1% top and bottom percentiles.
 minCov <- 1000 # if a sample has a good coverage (>=minCov), then don't set a lower thresold for nCount, it's already pretty good.
@@ -218,7 +213,15 @@ plot1 <- FeatureScatter(run1.subset, feature1 = "nCount_RNA", feature2 = "percen
 plot2 <- FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", gradient = "percent.mt", upper.limit = 100)
 plot1 + plot2
 ```
-Before and after:
+
+We can appreciate that after these QC steps samples present very homogeneous QC metrics:
+
+```{r sample_post_QC, fig.height=6, fig.width=10}
+# Visualize QC metrics as a violin plot
+VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
+```
+
+These QC thresholds allow us to equalize QC metrics across samples, improve the correlation between feature count and read depth, trim out dead cells, remove additional undected multiplets and undetermined cells and maximize conservation of cell number.
 
 ```{r before and after, fig.height=6, fig.width=10}
 
@@ -259,23 +262,20 @@ The vars.to.regress parameter allows to regress out certain variables, preventin
 
 ```{r SCTransform}
 
-run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt", seed.use = NULL)
+run1.subset <- SCTransform(run1.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
 ```
-
 
 ## 4. Linear dimensional reduction (PCA).
 
 ```{r PCA, fig.height=6, fig.width=10}
 
 # Run PCA on the SCT-normalyzed data.
-run1.subset <- RunPCA(run1.subset, assay = "SCT", seed.use = NULL) # features = VariableFeatures(object = run1.subset))
+run1.subset <- RunPCA(run1.subset, assay = "SCT") # features = VariableFeatures(object = run2.subset))
 
 DimPlot(run1.subset, reduction = "pca") + NoLegend() # An unique PCA is not enough to separate cell groups.
 
 ElbowPlot(run1.subset, ndims = 50)
 ```
-
-In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
 
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
 DimHeatmap(run1.subset, dims = 1:30, balanced = TRUE)
@@ -287,11 +287,13 @@ VizDimLoadings(run1.subset, dims = 1:30, reduction = "pca")
 
 ## 5. Clustering
 
+In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
+
 ```{r clustering}
 # Resolution fine-tuned in a separate Rmd.
 run1.subset <- FindNeighbors(run1.subset, dims = 1:30)
 run1.subset <- FindClusters(run1.subset, resolution = 0.8) # Default resolution = 0.8
-run1.subset <- RunUMAP(run1.subset, dims = 1:30, seed.use = NULL)
+run1.subset <- RunUMAP(run1.subset, dims = 1:30)
 ```
 
 ```{r cluster_visualization, fig.height=6, fig.width=10}
@@ -393,4 +395,11 @@ DimPlot(run1.subset, reduction = "umap", label = TRUE, repel = TRUE, label.size 
 
 # Save filtered file for data merging.
 saveRDS(run1.subset, file = "~/Documents/SC_Prostate/Output/run1/run1_processed.rds")
+```
+
+Session info.
+
+```{r session_info}
+
+sessionInfo()
 ```

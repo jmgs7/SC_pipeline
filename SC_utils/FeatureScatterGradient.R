@@ -1,8 +1,8 @@
 # This module contains the FeatureScatterGradient function.
 
 FeatureScatterGradient <- function(
-    SeuratObject, feature1, feature2, gradient, low = "blue", high = "yellow",
-    upper.limit = NULL, lower.limit = 0
+    SeuratObject, feature1, feature2, gradient, upper.limit = NULL,
+    lower.limit = 0, scale.colors = "viridis"
     ) {
 
   # FeatureScatterGradient adds the functionality over Seurat::FeatureScatter
@@ -14,8 +14,16 @@ FeatureScatterGradient <- function(
   # feature1: The feature to represent on x axis.
   # feature2: The feature to represent on y axis.
   # gradient: The feature which values will be used to set the color gradient.
-  # low: Color for low values.
-  # high: Color for high values.
+  # scale.colors = Color pallette to use in the gradient. Corresponds to the
+  # color palletes codes included in scale_gradient_viridis:
+  #     "magma" (or "A")
+  #     "inferno" (or "B")
+  #     "plasma" (or "C")
+  #     "viridis" (or "D")
+  #     "cividis" (or "E")
+  #     "rocket" (or "F")
+  #     "mako" (or "G")
+  #     "turbo" (or "H")
   # lower.limit:Lower limit of the gradient. Default is 0. Only applicable when
   # upper.limit is specified.
   # upper.limit: Upper limit of the gradient. When not specified, the gradient
@@ -42,14 +50,12 @@ FeatureScatterGradient <- function(
   plot <- ggplot(data = df, aes(x = df[,feature1], y = df[,feature2], color = df[,gradient])) +
     geom_point() +
     labs(x = feature1, y = feature2, subtitle = corr_label) +
-    scale_color_gradient(low = low, high = high, name = gradient) +
+    scale_color_viridis_c(name = gradient, option = scale.colors) +
     theme_classic()
 
   if (!is.null(upper.limit)) {
     plot <- plot +
-      scale_color_gradient(low = low, high = high, name = gradient,
-                           limits = c(lower.limit, upper.limit)
-                           )
+      scale_color_viridis_c(name = gradient, limits = c(lower.limit, upper.limit), option = scale.colors)
   }
 
   return(plot)
