@@ -2,7 +2,7 @@
 title: "Resolution testing."
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
-output: html_notebook
+output: # html_notebook
 ---
 
 ```{r setup, include=FALSE}
@@ -47,85 +47,64 @@ library(dplyr)
 library(patchwork)
 library(sctransform)
 library(ggplot2)
-library(celldex) # Cell annotation.
-library(SingleR) # Cell annotation.
-library(parallel)  # detectCores()
 library(future) # Allows parallelization in Seurat.
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = detectCores())
+plan("multicore", workers = parallel::detectCores())
 ```
 
 Load the data and apply the basic pipeline in one line.
 
 ```{r get_single_runs}
 
-test <- readRDS("../Data/run1/C1_Seurat_Edu.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>% SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt') %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
-
-
-```
-
-```{r get_merged_runs}
-
-test <- readRDS("../Data/SC_Prostate_raw.rds") %>% PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>% SCTransform(vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident")) %>% RunPCA(assay = "SCT") %>% FindNeighbors(dims = 1:30)
+resolutions = seq(from = 0.1, to = 2, by = 0.1)
+  
+test <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds") %>% 
+  PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>%
+  split(f = .$orig.ident) %>%
+  SCTransform(vst.flavor = "v2", vars.to.regress = 'percent.mt', verbose = FALSE) %>% 
+  RunPCA(assay = "SCT", verbose = FALSE) %>% 
+  IntegrateLayers(method = HarmonyIntegration, normalization.method = "SCT", verbose = FALSE) %>% 
+  FindNeighbors(dims = 1:30, reduction = "harmony", verbose = FALSE) %>% 
+  FindClusters(resolution = resolutions, verbose = FALSE) %>% 
+  RunUMAP(dims = 1:30, reduction = "harmony", verbose = FALSE)
 ```
 
 In the script below we created a loop that test all values for resolution in a certain range. It also plots the resulting umaps and storage both the Seurat Objects and plots generated in two different lists (output_list and plot_list). We tested the resolution in a range between 0.4 - 1.2 as the Seurat teams indicates that is suitable for a dataset of up to 3k cells.
 
-\# Plot number of clusters against resolution.
+```{r}
 
-plot(resolution_values, nClusters)
+clusterMetadata <- grep("SCT_snn_res.\\d+.?\\d*", colnames(test[[]]), value = TRUE)
 
-```{r cluster_optimization}
-
-# Set the range of values with an increment of 0.1
-start_value <- 0.1
-end_value <- 2
-increment <- 0.1
-
-
-# Create a loop to test the function with incremental values.
-
-# Create emtpy lists to storage data.
-plot_list <- list()
+# Create empty lists to storage data.
 resolution_values <- list()
 nClusters <- list()
 
-# This equivalent of range() in python.
-for (i in seq(start_value, end_value, by = increment)) {
+for (resValue in clusterMetadata) {
   
-  # Generate a new SeuratObjecto for each resolution value and storage it on a list.
-  output <- FindClusters(test, resolution = i, verbose = FALSE) %>% RunUMAP(dims = 1:30, verbose = FALSE)
-
+  resolution <- as.numeric(stringr::str_extract(resValue, "\\d+.?\\d*"))
+  
+  Idents(test) <- tibble::deframe(test[[resValue]])
+  
   # Plot each group of clusters generated, save the images and store the plots in a list.
-  plot <- DimPlot(output, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + ggtitle(paste0("Resolution = ", i)) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
-  plot_list[[length(plot_list) + 1]] <- plot
+  plot <- DimPlot(test, reduction = 'umap', label = TRUE, repel = TRUE, label.size = 4) + ggtitle(paste0("Resolution = ", resolution)) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
   
-  ggsave(filename = paste0("../Output/images/resolution=", i, ".jpg"), height = 6, width = 10, plot = plot, quality = 50)
+  ggsave(filename = paste0("~/Documents/SC_Prostate/Output/resolution_fine-tuning/resolution=", resolution, ".jpg"), height = 6, width = 10, plot = plot, quality = 50)
   
   # To visualize the number of clusters obtain for each resolution value, we plot number of clusters generated vs the resolution value.
   
   # Storage resolution values in a list.
-  resolution_values[[length(resolution_values) + 1]] <- i
+  resolution_values[[length(resolution_values) + 1]] <- resolution
   
   # Storage number of clusters in a lists. 
-  # This access the number of clusters in the SeuratObject, which is storage as a factor inside a df in the object. We access the df as a column, accesing the first row. Whe obtain the levels, transform them into integers, extract the maximum value and sum 1 (seurat clusters numeration starts by 0).
-  output_clusters <- max(as.integer(levels(output[["seurat_clusters"]][1,]))) + 1
+  # This access the number of clusters in the SeuratObject, which is storage as a factor inside the active.ident slot. We obtain the levels, transform them into integers, extract the maximum value and sum 1 (Seurat clusters numeration starts by 0).
+  output_clusters <- max(as.integer(levels(test@active.ident))) + 1
   nClusters[[length(nClusters) + 1]] <- output_clusters
   
-  cat("Calculated and plotted for resolution = ", i, "\n")
+  cat("Calculated and plotted for resolution = ", resolution, "\n")
+  
 }
-
-rm(test)
-rm(output)
-rm(output_clusters)
-rm(plot)
-rm(i)
-
-# Transform the list to vectors in order to plot them.
-resolution_values <- unlist(resolution_values)
-nClusters <- unlist(nClusters)
 ```
 
 ```{r plotting}

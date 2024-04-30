@@ -38,18 +38,15 @@ Analysis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@cs
 ```{r libraries, include = FALSE}
 library(Seurat)
 library(dplyr)
-library(patchwork)
-library(sctransform)
 library(ggplot2)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
-library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
 library(scDblFinder)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = detectCores())
+plan("multicore", workers = parallel::detectCores())
 
 # Import user's libraries.
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
@@ -155,7 +152,7 @@ set.seed(0)
 # dbr: The expected doublet rate. We use the output from BD Rapshody for each run.
 # dbr.sc: Uncertainty of the doublet rate. We are based on ground truth so we set it to 0.
 # knownDoublets & knownUse: The known doublets and how to use it. We use it for training.
-run3.sce <- scDblFinder(run3.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=detectCores()))
+run3.sce <- scDblFinder(run3.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=parallel::detectCores()))
 
 table(truth=run3.sce$Sample_Tag, call=run3.sce$scDblFinder.class)
 
@@ -334,7 +331,7 @@ reference <- HumanPrimaryCellAtlasData()
 run3.SCexp <- as.SingleCellExperiment(run3.subset)
 
 # Anotate using raw counts.
-SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::parallel::detectCores())
 
 run3.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -365,7 +362,7 @@ clusters <- as.character(levels(clusters)[clusters])
 run3.SCexp <- as.SingleCellExperiment(run3.subset)
 
 # We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = parallel::detectCores())
 
 run3.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```

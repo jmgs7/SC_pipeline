@@ -34,9 +34,7 @@ knitr::opts_chunk$set(
 ```{r libraries, include = FALSE}
 
 library(dplyr)
-library(patchwork)
 library(ggpubr)
-library(ggplot2)
 library(readODS) # Allows ods file import to add sample info
 ```
 

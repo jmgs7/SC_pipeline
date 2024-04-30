@@ -35,22 +35,16 @@ knitr::opts_chunk$set(
 ```{r libraries, include = TRUE}
 
 library(Seurat)
-library(dplyr)
-library(patchwork)
-library(sctransform)
 library(ggplot2)
-library(ggpubr)
-library(tidyr)
 library(ggrepel)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
-library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
-library(glmGamPoi)
+
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = detectCores())
+plan("multicore", workers = parallel::detectCores())
 
 # Import user's libraries.
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
@@ -70,17 +64,21 @@ run_dirs <- list.dirs("../Data",recursive = FALSE)
 run_dirs <- run_dirs[grepl("run",run_dirs)]
 
 # lapply stands for "list apply", and allows to apply a certain function over all elements of an array: lapply(X, FUN). You can apply an R-defined function or create you own as shown belox.
-rds_objects <- lapply(X = run_dirs, FUN = function(x){
+rds_objects <- lapply(X = run_dirs, FUN = function(x) {
+  
   rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T) # For each run directory list the filtered RDS object.
+  
   # If there is something in the directory list...
-  if (length(rds_file) > 0){
-    rds_object <- readRDS(rds_file) # Load the RDS object in to a list.
-    rds_object@meta.data$orig.ident <- basename(x) # Add the original path in the metadata to keep track of data.
-    return(rds_object) # Return the list of RDS object and...
-  } else{
-    return(NULL) # If the directory list is empty return null.
+    if (length(rds_file) > 0){
+      rds_object <- readRDS(rds_file) # Load the RDS object in to a list.
+      rds_object@meta.data$orig.ident <- basename(x) # Add the original path in the metadata to keep track of data.
+      return(rds_object) # Return the list of RDS object and...
+      
+    } else {
+      return(NULL) # If the directory list is empty return null.
+    }
   }
-})
+)
 
 # sapply is similar to lapply but returns a vector of the same lenght instead of the same element as the input (i.e. lapply returns a list is input is a list, but sapply always returns a vector).
 rds_objects[sapply(rds_objects, is.null)] <- NULL # Filter emtpy objects.
@@ -121,6 +119,12 @@ saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 
 # 3. Visualization of QC metrics.
 
+```{r load_raw_data, include = FALSE}
+
+# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+```
+
+
 Checking the QC metrics of the combine dataset.
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
@@ -152,25 +156,58 @@ VlnPlot(SCP_data, features = "percent.mt", group.by = "Sample_Name") + NoLegend(
 
 Apparently, run2 and run4 have higher minimum counts than run1 and run3. This could led to batch effect that will be corrected in later steps. Despite this, samples and run appear to have a pretty similar distribution of QC metrics.
 
-# 3. Normalize and check batch effect.
+# 3. Normalize and remove batch effect.
 
 Batch effect is considered the presence of certain unique characteristics within a specific dataset that make it differentiable from the rest when merging all the data. As we are merging data from different runs, variations in the samples processing and further cell manipulation and sequencing could induce those batch effect.
 
 Before the merge, we annotate the cell with its run of origin, so we can regress out that variable in the normalization process to minimize batch effect.
 
-PCA plotting of the first two PC shows that the different runs are not separated, thus they don't show batch effect.
+Seurat offers methods to integrate data from different batches (different sequencing runs, different samples, etc.). In v5, a new method called IntegrateLayers they easily perform the whole pipeline in a few steps. The first of them is to split the data according to the source of batch effect (in our case by run).
 
-```{r batch_effect, fig.height=6, fig.width=10}
+```{r split_data}
 
-# Launch sct transform and run umap (regress by orig.ident in order to correct batch effect)
+# The split method splits the given slot according to the indicated information.
+SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
+```
 
-SCP_data <- SCTransform(SCP_data, vst.flavor = "v2", vars.to.regress = c("percent.mt", "orig.ident"))
+# 3.1. Normalize and apply data integration.
+
+It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
+
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
+
+```{r norm_std, fig.height=6, fig.width=10}
+
+# Standard normalization.
+SCP_data <- NormalizeData(SCP_data)
+SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000)
+SCP_data <- ScaleData(SCP_data)
+```
+
+We now run SCTransform, PCA and the integration.
+
+```{r batch_effect_sct, fig.height=6, fig.width=10}
+
+# Launch sct transform and run PCA.
+SCP_data <- SCTransform(SCP_data, vst.flavor = "v2", vars.to.regress = "percent.mt")
 SCP_data <- RunPCA(SCP_data, assay = "SCT")
 
-# Use origin run info to visualize batch effect.
-Idents(SCP_data) <- "orig.ident"
+# Integration.
+SCP_data <- IntegrateLayers(
+  object = SCP_data, method = HarmonyIntegration,
+  normalization.method = "SCT",
+  verbose = FALSE
+)
+```
 
-DimPlot(SCP_data, reduction = "pca") # Looks good!. There is no batch effects between runs!
+There are several methods for integration, but according to some sources (https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1850-9), the best ones are Harmony, Seurat's CCA and scVII (requires setting up a conda environment and installing reticulate, see documentation). We choose Harmony for being well-integrated with Seruat, performing pretty well with low computational effort, and better respecting the data original structure when compared against Seurat's CCA.
+
+If we visualize the PCA plot, we appreciate a bigger overlap between runs.
+
+```{r fig.height=6, fig.width=10}
+
+Idents(SCP_data) <- "orig.ident"
+DimPlot(SCP_data, reduction = "pca")
 ```
 
 ## 3.2. Set dimensionality.
@@ -194,40 +231,21 @@ DimHeatmap(SCP_data, dims = 1:30, balanced = TRUE)
 VizDimLoadings(SCP_data, dims = 1:30, reduction = "pca")
 ```
 
-# 4. Find variable top variable features.
-
-```{r var_features, fig.height=6, fig.width=10}
-
-# SCP_data <- FindVariableFeatures(SCP_data, selection.method = "vst", nfeatures = 1000)
-
-# Genes with differencial expression in different cells are good candidates to be biomarkers.
-# Identify the 10 most highly variable genes
-top <- head(VariableFeatures(SCP_data), 20)
-
-# plot variable features with and without labels
-plot1 <- VariableFeaturePlot(SCP_data)
-plot2 <- LabelPoints(plot = plot1, points = top, repel = TRUE)
-plot1 + plot2
-```
 
 # 4. Clustering.
 
-Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 0.8 as a appropriate value for clustering.
+Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 1 as an appropriate value for clustering.
+
+It is important to notice that a new reduction is created called "harmony". We need to indicate this as the reduction to use in the clustering.
 
 ```{r clustering}
 
 # Resolution fine-tuned in a separate Rmd.
-SCP_data <- FindNeighbors(SCP_data, dims = 1:30)
-SCP_data <- FindClusters(SCP_data, resolution = 0.8, random.seed = 0) # Default resolution = 0.8
-SCP_data <- RunUMAP(SCP_data, dims = 1:30)
+SCP_data <- FindNeighbors(SCP_data, dims = 1:30, reduction = "harmony")
+SCP_data <- FindClusters(SCP_data, resolution = 1) # Default resolution = 0.8
+SCP_data <- RunUMAP(SCP_data, dims = 1:30, reduction = "harmony")
 ```
 
-We obtain 26 distinct clusters.
-
-```{r cluster_visualization, fig.height=6, fig.width=10}
-
-DimPlot(SCP_data, reduction = "umap", label = TRUE) # 26 clusters
-```
 
 ## 4.1. Cluster QC.
 
@@ -261,10 +279,13 @@ Cell-by-cell annotation identifies 30 different cell types based on the HumanPri
 # Download reference data from celldex.
 reference <- HumanPrimaryCellAtlasData()
 
-# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
-merged.SCexp <- as.SingleCellExperiment(SCP_data)
+# Join layers before conversion. SingleR uses the RNA assay.
+merged.SCexp <- JoinLayers(SCP_data, assay = "RNA") 
 
-SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
+merged.SCexp <- as.SingleCellExperiment(merged.SCexp)
+
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::detectCores())
 
 SCP_data[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -291,10 +312,12 @@ clusters <- as.character(levels(clusters)[clusters])
 
 # reference <- HumanPrimaryCellAtlasData()
 
+# # Join layers before conversion. SingleR uses the RNA assay.
+# merged.SCexp <- JoinLayers(SCP_data, assay = "RNA") 
 # merged.SCexp <- as.SingleCellExperiment(SCP_data)
 
 # We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = parallel::detectCores())
 
 SCP_data[["cluster.labels"]] <- SingleR.annotation$labels
 ```

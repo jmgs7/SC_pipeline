@@ -38,36 +38,69 @@ Analysis of scRNA-seq data provided by Eduardo Andrés León (eduardo.andres\@cs
 ```{r libraries, include = FALSE}
 library(Seurat)
 library(dplyr)
-library(patchwork)
-library(sctransform)
 library(ggplot2)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
-library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
 library(scDblFinder)
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = detectCores())
+plan("multicore", workers = parallel::detectCores())
 
 # Import user's libraries.
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
 ```
 
-## 1. Import raw data.
+## 1. Import data and exploratory analysis.
+
+Import data from RDS file provided by Eduardo Andrés León (eduardo.andres\@csic.es, Instituto de Parasitología y Biología López Neyra, Granada).
+
+These data contains raw counts and a previously normalized dataset. Nevertheless, we re-run the normalization using the new SCTransform method.
+
+```{r import_data}
+# run1 <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat_Edu.rds")
+# run1 # Show information about the Seurat object.
+```
+
+```{r}
+
+# rm(run1)
+```
+
+Data from run1 contained 3809 cells originally . After eliminating cells tagged (they are label at `run1@metadata[["Sample_Tag"]])`\` as "undetermined" (no UMIs) or "multiplet" (droplets with more than 1 cell), 3118 cells remained. Next, 3 criteria was followed in order to filter the cells:
+
+-   Cells with less than 7846.18 genes.
+
+-   Cells with more than 91.585 genes.
+
+-   Cells with a percentage of mitochondrial genes lower than 25%.
+
+After those filters, the 2151 cells reported by the command above remained.
+
+Problem is, apart from the fact the use of float values for the number of genes is sort of confusing, we don't have any kind of information about the methodology followed to obtain these values.
+
+By using our own data-driven method (removal of the top and bottom 1% percentiles of cells by their number of genes and cells with more than 25% of mitochondrial genes) we obtain very close results, with 2135 cells kept after the filtering.
+
+Nevertheless, as the raw count matrix provided is lacking some essential information such as the cells' sample and group, is not possible to follow this approach and we depend on the CSIC staff's pre-analysed data.
+
+It is necessary to either obtain the correct count matrix or elucidate how the previous data processing was performed.
+
+UPDATE: Since we know how to introduced the missing information into the raw matrix, we will use our own analysis form now on.
+
+### 1.1. Import raw data.
 
 We will use the raw data in order to visualize QC parameters.
 
 ```{r import_raw_data}
 
-run1.raw <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_Seurat.rds")
+run1.raw <- readRDS("~/Documents/SC_Prostate/Data/run1/C1_expected.rds")
 run1.raw$orig.ident <- "run1"
 run1.raw <- SetIdent(run1.raw, value = run1.raw$orig.ident)
 run1.raw
 ```
 
-### 1.1. Adding sample names and sample groups.
+### 1.2. Adding sample names and sample groups.
 
 ```{r}
 
@@ -134,6 +167,7 @@ In order to better assess the quality of each individual samples and identify pr
 
 # Visualize QC metrics as a violin plot
 VlnPlot(run1.raw, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
+
 ```
 
 ```{r}
@@ -154,7 +188,7 @@ set.seed(0)
 # dbr: The expected doublet rate. We use the output from BD Rapshody for each run.
 # dbr.sc: Uncertainty of the doublet rate. We are based on ground truth so we set it to 0.
 # knownDoublets & knownUse: The known doublets and how to use it. We use it for training.
-run1.sce <- scDblFinder(run1.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=detectCores()))
+run1.sce <- scDblFinder(run1.sce, dbr = BDstats[1], dbr.sd = BDstats[2], knownDoublets = knownDoublets, knownUse = "positive", BPPARAM = BiocParallel::MulticoreParam(workers=parallel::detectCores()))
 
 table(truth=run1.sce$Sample_Tag, call=run1.sce$scDblFinder.class)
 
@@ -168,7 +202,7 @@ run1.raw$ident <- NULL
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
-We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we prefer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
+We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we preffer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
 
 UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
 
@@ -213,14 +247,7 @@ plot2 <- FeatureScatterGradient(run1.subset, feature1 = "nCount_RNA", feature2 =
 plot1 + plot2
 ```
 
-We can appreciate that after these QC steps samples present very homogeneous QC metrics:
-
-```{r sample_post_QC, fig.height=6, fig.width=10}
-# Visualize QC metrics as a violin plot
-VlnPlot(run1.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
-```
-
-These QC thresholds allow us to equalize QC metrics across samples, improve the correlation between feature count and read depth, trim out dead cells, remove additional undected multiplets and undetermined cells and maximize conservation of cell number.
+Before and after:
 
 ```{r before and after, fig.height=6, fig.width=10}
 
@@ -333,7 +360,7 @@ reference <- HumanPrimaryCellAtlasData()
 run1.SCexp <- as.SingleCellExperiment(run1.subset)
 
 # Anotate using raw counts.
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::detectCores())
 
 run1.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -364,7 +391,7 @@ clusters <- as.character(levels(clusters)[clusters])
 run1.SCexp <- as.SingleCellExperiment(run1.subset)
 
 # We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+SingleR.annotation <- SingleR(test = run1.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = parallel::detectCores())
 
 run1.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```
