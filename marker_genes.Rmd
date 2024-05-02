@@ -81,13 +81,13 @@ We also try to correct the batch effect in the analysis using the latent.vars op
 SCP_data <- CalculateCDR(SCP_data)
 
 cluster_markers <- FindAllMarkers(object = SCP_data,
-                                   test.use = "MAST", # Use MAST as DE method.
-                                   latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
-                                   assay = "RNA",
-                                   slot = "data", # Use log-transformed CPMs.
-                                   only.pos = TRUE, # Cell markers can only be positive markers.
-                                   min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
-                                   logfc.threshold = log2(1.5) # Filter by FC threshold.
+                                  test.use = "MAST", # Use MAST as DE method.
+                                  latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+                                  assay = "RNA",
+                                  slot = "data", # Use log-transformed CPMs.
+                                  only.pos = TRUE, # Cell markers can only be positive markers.
+                                  min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+                                  logfc.threshold = log2(1.5) # Filter by FC threshold.
           
 )
 ```
