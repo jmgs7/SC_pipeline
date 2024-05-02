@@ -36,7 +36,6 @@ knitr::opts_chunk$set(
 
 library(Seurat)
 library(future) # Allows parallelization in Seurat.
-library(future.apply) # future_apply.
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
