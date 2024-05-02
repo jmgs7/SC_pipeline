@@ -172,17 +172,7 @@ SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
 
 # 3.1. Normalize and apply data integration.
 
-It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
-
-Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
-
-```{r norm_std, fig.height=6, fig.width=10}
-
-# Standard normalization.
-SCP_data <- NormalizeData(SCP_data)
-SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000)
-SCP_data <- ScaleData(SCP_data)
-```
+It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811, https://github.com/satijalab/seurat/issues/7585) it doesn't mind to normalize before or after splitting.
 
 We now run SCTransform, PCA and the integration.
 

@@ -1,0 +1,141 @@
+---
+title: "Finding marker genes"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: # html_notebook
+---
+
+```{r setup, include=FALSE}
+
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries, include = TRUE}
+
+library(Seurat)
+library(future) # Allows parallelization in Seurat.
+library(future.apply) # future_apply.
+
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = parallel::detectCores()/4) # Adjust threads for memory use.
+# Adjust memory allocation per process.
+options(future.globals.maxSize = 2500 * 1024^2) # 2.5 GB per thread
+
+# Import user's libraries.
+source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/CalculateCellularDetectionRate.R")
+```
+
+## 1. Load the data.
+
+```{r load_raw_data, include = FALSE}
+
+SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+```
+
+## 2 Join layers and perform normalization.
+
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
+
+```{r norm_std, fig.height=6, fig.width=10}
+
+# Join the per-run splitted layers.
+SCP_data <- JoinLayers(SCP_data, assay = "RNA")
+
+# Standard normalization.
+SCP_data <- NormalizeData(SCP_data, scale.factor = 1e6, assay = "RNA") # scale.factor = 1e6 means we are using CPMs.
+SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000, assay = "RNA")
+SCP_data <- ScaleData(SCP_data, assay = "RNA", vars.to.regress = c("percent.mt", "orig.ident")) # regress out batch effect and % mito.
+```
+
+## 3. Find markers for each gene.
+
+According to the benchmark performed by Sonenson, C. & Robison, D. (2018), the top method for DE with scRNA-seq data is MAST using CPMs (Counts Per Million) and taking into account the Cell Detection Rate (CDR). CDR is described as the proportion of genes expressed in a single cell.
+
+We also try to correct the batch effect in the analysis using the latent.vars option of FindMarkers.
+
+Despite Seurat's FindAllMarkers automates the whole process of marker finding on each cluster, we opt to parallelize the process using the future framework.
+
+```{r}
+
+# Calculate Cell Detection Rate (CDR).
+SCP_data <- CalculateCDR(SCP_data)
+
+# Use future_apply parallelize the FindMarkers function.
+markers <- future_lapply(Idents(SCP_data), function(ident) {
+  
+  FindMarkers(object = SCP_data, 
+              ident.1 = ident, 
+              test.use = "MAST", # Use MAST as DE method.
+              latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+              assay = "RNA", 
+              slot = "data", # Use log-transformed CPMs.
+              only.pos = TRUE, # Cell markers can only be positive markers.
+              min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+              logfc.threshold = log2(1.5)) # Filter by FC threshold.
+  }, 
+  
+  future.seed = TRUE # Reproducibility when parallelizing.
+)
+```
+
+```{r}
+
+# Calculate Cell Detection Rate (CDR).
+SCP_data <- CalculateCDR(SCP_data)
+
+# Use future_apply parallelize the FindMarkers function.
+markers <- future_lapply(Idents(SCP_data), function(ident) {
+  
+  cluster_markers <- FindMarkers(object = SCP_data,
+                                 ident.1 = ident,
+                                 test.use = "MAST", # Use MAST as DE method.
+                                 latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+                                 assay = "RNA",
+                                 slot = "data", # Use log-transformed CPMs.
+                                 only.pos = TRUE, # Cell markers can only be positive markers.
+                                 min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+                                 logfc.threshold = log2(1.5) # Filter by FC threshold.
+                                 ) 
+  
+  # Store the cluster id to be identifiable (future do not returns the results in order).
+  cluster_markers$cluster <- ident
+  
+  # Return the cluster markers to future_apply
+  return(cluster_markers)
+  
+  }, 
+  
+  future.seed = TRUE # Reproducibility when parallelizing.
+)
+```
+
+Session Info.
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
+```
