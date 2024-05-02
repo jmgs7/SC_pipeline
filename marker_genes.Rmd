@@ -74,43 +74,7 @@ SCP_data <- ScaleData(SCP_data, assay = "RNA", vars.to.regress = c("percent.mt",
 
 According to the benchmark performed by Sonenson, C. & Robison, D. (2018), the top method for DE with scRNA-seq data is MAST using CPMs (Counts Per Million) and taking into account the Cell Detection Rate (CDR). CDR is described as the proportion of genes expressed in a single cell.
 
-We also try to correct the batch effect in the analysis using the latent.vars option of FindMarkers.
-
-Despite Seurat's FindAllMarkers automates the whole process of marker finding on each cluster, we opt to parallelize the process using the future framework.
-
-```{r}
-
-# Calculate Cell Detection Rate (CDR).
-SCP_data <- CalculateCDR(SCP_data)
-
-# Use future_apply parallelize the FindMarkers function.
-markers <- future_lapply(Idents(SCP_data), function(ident) {
-  
-  cluster_markers <- FindMarkers(object = SCP_data,
-                                 ident.1 = ident,
-                                 test.use = "MAST", # Use MAST as DE method.
-                                 latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
-                                 assay = "RNA",
-                                 slot = "data", # Use log-transformed CPMs.
-                                 only.pos = TRUE, # Cell markers can only be positive markers.
-                                 min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
-                                 logfc.threshold = log2(1.5) # Filter by FC threshold.
-                                 ) 
-  
-  # Store the cluster id to be identifiable (future do not returns the results in order).
-  cluster_markers$cluster <- ident
-  
-  # Return the cluster markers to future_apply
-  return(cluster_markers)
-  
-  }, 
-  
-  future.seed = TRUE # Reproducibility when parallelizing.
-)
-```
-
-
-Slower but less memory-intensive method:
+We also try to correct the batch effect in the analysis using the latent.vars option of FindAllMarkers.
 
 ```{r}
 
