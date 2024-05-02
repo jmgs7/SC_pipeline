@@ -40,7 +40,7 @@ library(future.apply) # future_apply.
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = parallel::detectCores()/4) # Adjust threads for memory use.
+plan("multicore", workers = parallel::detectCores()) # Adjust threads for memory use.
 # Adjust memory allocation per process.
 options(future.globals.maxSize = 2500 * 1024^2) # 2.5 GB per thread
 
@@ -86,29 +86,6 @@ SCP_data <- CalculateCDR(SCP_data)
 # Use future_apply parallelize the FindMarkers function.
 markers <- future_lapply(Idents(SCP_data), function(ident) {
   
-  FindMarkers(object = SCP_data, 
-              ident.1 = ident, 
-              test.use = "MAST", # Use MAST as DE method.
-              latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
-              assay = "RNA", 
-              slot = "data", # Use log-transformed CPMs.
-              only.pos = TRUE, # Cell markers can only be positive markers.
-              min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
-              logfc.threshold = log2(1.5)) # Filter by FC threshold.
-  }, 
-  
-  future.seed = TRUE # Reproducibility when parallelizing.
-)
-```
-
-```{r}
-
-# Calculate Cell Detection Rate (CDR).
-SCP_data <- CalculateCDR(SCP_data)
-
-# Use future_apply parallelize the FindMarkers function.
-markers <- future_lapply(Idents(SCP_data), function(ident) {
-  
   cluster_markers <- FindMarkers(object = SCP_data,
                                  ident.1 = ident,
                                  test.use = "MAST", # Use MAST as DE method.
@@ -130,6 +107,27 @@ markers <- future_lapply(Idents(SCP_data), function(ident) {
   
   future.seed = TRUE # Reproducibility when parallelizing.
 )
+```
+
+
+Slower but less memory-intensive method:
+
+```{r}
+
+# Calculate Cell Detection Rate (CDR).
+SCP_data <- CalculateCDR(SCP_data)
+
+cluster_markers <- FindAllMarkers(object = SCP_data,
+                                  test.use = "MAST", # Use MAST as DE method.
+                                  latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+                                  assay = "RNA",
+                                  slot = "data", # Use log-transformed CPMs.
+                                  only.pos = TRUE, # Cell markers can only be positive markers.
+                                  min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+                                  logfc.threshold = log2(1.5) # Filter by FC threshold.
+  
+) 
+
 ```
 
 Session Info.
