@@ -36,7 +36,6 @@ knitr::opts_chunk$set(
 
 library(Seurat)
 library(future) # Allows parallelization in Seurat.
-library(future.apply) # future_apply.
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
@@ -118,16 +117,23 @@ Slower but less memory-intensive method:
 SCP_data <- CalculateCDR(SCP_data)
 
 cluster_markers <- FindAllMarkers(object = SCP_data,
-                                  test.use = "MAST", # Use MAST as DE method.
-                                  latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
-                                  assay = "RNA",
-                                  slot = "data", # Use log-transformed CPMs.
-                                  only.pos = TRUE, # Cell markers can only be positive markers.
-                                  min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
-                                  logfc.threshold = log2(1.5) # Filter by FC threshold.
-  
-) 
+                                   test.use = "MAST", # Use MAST as DE method.
+                                   latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+                                   assay = "RNA",
+                                   slot = "data", # Use log-transformed CPMs.
+                                   only.pos = TRUE, # Cell markers can only be positive markers.
+                                   min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+                                   logfc.threshold = log2(1.5) # Filter by FC threshold.
+          
+)
+```
 
+Write the output to a csv file.
+
+```{r}
+
+# Save to csv.
+write.csv(cluster_markers, "~/Documents/SC_Prostate/Output/cluster_markers.csv", row.names = TRUE)
 ```
 
 Session Info.
