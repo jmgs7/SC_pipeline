@@ -64,7 +64,7 @@ run3.raw <- SetIdent(run3.raw, value = run3.raw$orig.ident)
 run3.raw
 ```
 
-### 1.1. Adding sample names and sample groups.
+### 1.2. Adding sample names and sample groups.
 
 ```{r}
 
@@ -166,7 +166,7 @@ run3.raw$ident <- NULL
 
 Taking into account the observed QC parameters and our reduces number of cells, we suggest a soft data-driven filtering method. In our case, we trimmed out the top and bottom 1% of cells according to their gene count, and apply a %mito cutoff of 25%.
 
-We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we prefer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
+We could hard-code the parameters used by the CSIC, but as we cannot know the methodology to decide those values, we preffer to use ours, since obtains pretty similar results. For visualization of the QC, this would be enough.
 
 UPDATE: This is actually the method we will use, since we are going to start from the raw matrix.
 
@@ -211,14 +211,7 @@ plot2 <- FeatureScatterGradient(run3.subset, feature1 = "nCount_RNA", feature2 =
 plot1 + plot2
 ```
 
-We can appreciate that after these QC steps samples present very homogeneous QC metrics:
-
-```{r sample_post_QC, fig.height=6, fig.width=10}
-# Visualize QC metrics as a violin plot
-VlnPlot(run3.subset, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Sample_Name")
-```
-
-These QC thresholds allow us to equalize QC metrics across samples, improve the correlation between feature count and read depth, trim out dead cells, remove additional undected multiplets and undetermined cells and maximize conservation of cell number.
+Before and after:
 
 ```{r before and after, fig.height=6, fig.width=10}
 
@@ -251,15 +244,18 @@ Save filtered data.
 saveRDS(run3.subset, file = "~/Documents/SC_Prostate/Data/run3/run3_filtered.rds")
 ```
 
-## 3. Normalization using SCTransform.
+## 3. Normalization.
 
-We normalize data using the new SCTransform methodology. This methodology is more precise, more friendly with the original data structure, and offers better clustering results.
+We normalize data using the standard pipeline. We will log-transform the counts per million as other software packages do such as scranpy.
 
 The vars.to.regress parameter allows to regress out certain variables, preventing them to have a high impact on PCA dimension reduction and further clustering of samples.
 
-```{r SCTransform}
+```{r normalization}
 
-run3.subset <- SCTransform(run3.subset, vst.flavor = "v2", vars.to.regress = "percent.mt")
+# Standard normalization.
+run3.subset <- NormalizeData(run3.subset, scale.factor = 1e6, assay = "RNA") # scale.factor = 1e6 means we are using CPMs.
+run3.subset <- FindVariableFeatures(run3.subset, nfeatures = 3000, assay = "RNA")
+run3.subset <- ScaleData(run3.subset, assay = "RNA", vars.to.regress = "percent.mt") # regress out % mito.
 ```
 
 ## 4. Linear dimensional reduction (PCA).
@@ -267,7 +263,7 @@ run3.subset <- SCTransform(run3.subset, vst.flavor = "v2", vars.to.regress = "pe
 ```{r PCA, fig.height=6, fig.width=10}
 
 # Run PCA on the SCT-normalyzed data.
-run3.subset <- RunPCA(run3.subset, assay = "SCT") # features = VariableFeatures(object = run3.subset))
+run3.subset <- RunPCA(run3.subset, assay = "RNA") # features = VariableFeatures(object = run3.subset))
 
 DimPlot(run3.subset, reduction = "pca") + NoLegend() # An unique PCA is not enough to separate cell groups.
 
@@ -275,22 +271,25 @@ ElbowPlot(run3.subset, ndims = 50)
 ```
 
 ```{r PCA_heatmap, fig.height=15, fig.width=10}
-DimHeatmap(run3.subset, dims = 1:30, balanced = TRUE)
+
+DimHeatmap(run3.subset, dims = 1:20, balanced = TRUE)
 ```
 
 ```{r PCA_top_features, fig.height=30, fig.width=15}
-VizDimLoadings(run3.subset, dims = 1:30, reduction = "pca")
+
+VizDimLoadings(run3.subset, dims = 1:20, reduction = "pca")
 ```
 
 ## 5. Clustering
 
-In normal circumstances, a selection of the first 20 dims would be enough, but the Seurat developers recommend using a higher amount of PCA dims when using SCTransform.
+A selection of the first 20 dims appears to be enough.
 
 ```{r clustering}
+
 # Resolution fine-tuned in a separate Rmd.
-run3.subset <- FindNeighbors(run3.subset, dims = 1:30)
-run3.subset <- FindClusters(run3.subset, resolution = 0.8) # Default resolution = 0.8
-run3.subset <- RunUMAP(run3.subset, dims = 1:30)
+run3.subset <- FindNeighbors(run3.subset, dims = 1:20)
+run3.subset <- FindClusters(run3.subset, resolution = 1) # Default resolution = 0.8
+run3.subset <- RunUMAP(run3.subset, dims = 1:20)
 ```
 
 ```{r cluster_visualization, fig.height=6, fig.width=10}
@@ -298,10 +297,6 @@ DimPlot(run3.subset, reduction = "umap", label = TRUE)
 ```
 
 Cluster QC.
-
-As we can observe, the data structure is conditioned by the abundant presence of mitochondrial DNA. Taking into account the 2 clusters with less % of mitochondrial DNA, clusters 14 and 15, we appreciate how the lower content in mitochondrial material correlates with lower feature and read counts. On the other hand, if we compare the distritrubution of mitoDNA of each cluster with the feature and count distribution, we can see a clear similarity.
-
-Thus, mitochondrial DNA is shaping the data, and probably conditioning the cell annotation and further analysis.
 
 ```{r cluster_QC, fig.height=6, fig.width=10}
 # Visualize QC metrics as a violin plot
@@ -320,7 +315,7 @@ plot1 + NoLegend() + plot2 + NoLegend()
 
 Cell annotation is performed using the Human Cell Atlas as reference.
 
-SingleR.annotation uses the logcounts provided in the count matrix of the SingleCellExperiment object by default. Nevertheless, after applying SCTransform, counts and logcounts are both the normalized counts (so both values are the same).
+SingleR.annotation uses the logcounts provided in the count matrix of the SingleCellExperiment object by default.
 
 ```{r annotation}
 # Using celldex and SingleR packages.
@@ -331,7 +326,7 @@ reference <- HumanPrimaryCellAtlasData()
 run3.SCexp <- as.SingleCellExperiment(run3.subset)
 
 # Anotate using raw counts.
-SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::parallel::detectCores())
+SingleR.annotation <- SingleR(test = run3.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::detectCores())
 
 run3.subset[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -340,14 +335,16 @@ run3.subset[["cell.labels"]] <- SingleR.annotation$labels
 DimPlot(run3.subset, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
-You can also obtain the anotation on a cluster-by-cluster method based rather than a cell-by-cell one. By cluster annotation:
+You can also obtain the annotation on a cluster-by-cluster method based rather than a cell-by-cell one. By cluster annotation:
 
 ```{r}
+
 clusters <- run3.subset@meta.data[["seurat_clusters"]]
 clusters <- as.character(levels(clusters)[clusters])
 ```
 
 ```{r cluster_annotation}
+
 # Obtaining a vector containing the cluster of each cell in order.
 
 # Get the factor contained in the SeuratObject with all this information.
@@ -368,6 +365,7 @@ run3.subset[["cluster.labels"]] <- SingleR.annotation$labels
 ```
 
 ```{r set_ids}
+
 # We composite the cluster name. That way when 2 clusters name are the same Seurat doesn't merge the labels.
 
 # Get clusters levels accesing the SeuratObject variable as a df and then accesing the df as a column.
@@ -385,6 +383,7 @@ run3.subset <- RenameIdents(run3.subset, new.clusters.ids)
 ```
 
 ```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+
 DimPlot(run3.subset, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
@@ -399,4 +398,5 @@ Session info.
 ```{r session_info}
 
 sessionInfo()
+RNGkind()
 ```

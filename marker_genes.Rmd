@@ -56,17 +56,12 @@ SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.r
 
 ## 2 Join layers and perform normalization.
 
-Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves) or log-transformed data, we only need to join the data layers, as there is no difference normalizing before or after the splitting (https://github.com/satijalab/seurat/issues/7585).
 
 ```{r norm_std, fig.height=6, fig.width=10}
 
 # Join the per-run splitted layers.
 SCP_data <- JoinLayers(SCP_data, assay = "RNA")
-
-# Standard normalization.
-SCP_data <- NormalizeData(SCP_data, scale.factor = 1e6, assay = "RNA") # scale.factor = 1e6 means we are using CPMs.
-SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000, assay = "RNA")
-SCP_data <- ScaleData(SCP_data, assay = "RNA", vars.to.regress = c("percent.mt", "orig.ident")) # regress out batch effect and % mito.
 ```
 
 ## 3. Find markers for each gene.
@@ -81,13 +76,13 @@ We also try to correct the batch effect in the analysis using the latent.vars op
 SCP_data <- CalculateCDR(SCP_data)
 
 cluster_markers <- FindAllMarkers(object = SCP_data,
-                                   test.use = "MAST", # Use MAST as DE method.
-                                   latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
-                                   assay = "RNA",
-                                   slot = "data", # Use log-transformed CPMs.
-                                   only.pos = TRUE, # Cell markers can only be positive markers.
-                                   min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
-                                   logfc.threshold = log2(1.5) # Filter by FC threshold.
+                                  test.use = "MAST", # Use MAST as DE method.
+                                  latent.vars = c("orig.ident", "CDR"), # Correct by CDR and batch effect.
+                                  assay = "RNA",
+                                  slot = "data", # Use log-transformed CPMs.
+                                  only.pos = TRUE, # Cell markers can only be positive markers.
+                                  min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
+                                  logfc.threshold = log2(1.5) # Filter by FC threshold.
           
 )
 ```

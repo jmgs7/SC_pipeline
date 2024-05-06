@@ -39,12 +39,13 @@ library(ggplot2)
 library(ggrepel)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
+library(parallel) # detectCores()
 library(future) # Allows parallelization in Seurat.
 library(readODS) # Allows ods file import to add sample info
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
-plan("multicore", workers = parallel::detectCores())
+plan("multicore", workers = detectCores())
 
 # Import user's libraries.
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/FeatureScatterGradient.R")
@@ -64,21 +65,17 @@ run_dirs <- list.dirs("../Data",recursive = FALSE)
 run_dirs <- run_dirs[grepl("run",run_dirs)]
 
 # lapply stands for "list apply", and allows to apply a certain function over all elements of an array: lapply(X, FUN). You can apply an R-defined function or create you own as shown belox.
-rds_objects <- lapply(X = run_dirs, FUN = function(x) {
-  
+rds_objects <- lapply(X = run_dirs, FUN = function(x){
   rds_file <- list.files(path = x, pattern = "*_filtered.rds",full.names = T) # For each run directory list the filtered RDS object.
-  
   # If there is something in the directory list...
-    if (length(rds_file) > 0){
-      rds_object <- readRDS(rds_file) # Load the RDS object in to a list.
-      rds_object@meta.data$orig.ident <- basename(x) # Add the original path in the metadata to keep track of data.
-      return(rds_object) # Return the list of RDS object and...
-      
-    } else {
-      return(NULL) # If the directory list is empty return null.
-    }
+  if (length(rds_file) > 0){
+    rds_object <- readRDS(rds_file) # Load the RDS object in to a list.
+    rds_object@meta.data$orig.ident <- basename(x) # Add the original path in the metadata to keep track of data.
+    return(rds_object) # Return the list of RDS object and...
+  } else{
+    return(NULL) # If the directory list is empty return null.
   }
-)
+})
 
 # sapply is similar to lapply but returns a vector of the same lenght instead of the same element as the input (i.e. lapply returns a list is input is a list, but sapply always returns a vector).
 rds_objects[sapply(rds_objects, is.null)] <- NULL # Filter emtpy objects.
@@ -119,12 +116,6 @@ saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 
 # 3. Visualization of QC metrics.
 
-```{r load_raw_data, include = FALSE}
-
-# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
-```
-
-
 Checking the QC metrics of the combine dataset.
 
 ```{r QC_visualization, fig.height=6, fig.width=10}
@@ -164,6 +155,11 @@ Before the merge, we annotate the cell with its run of origin, so we can regress
 
 Seurat offers methods to integrate data from different batches (different sequencing runs, different samples, etc.). In v5, a new method called IntegrateLayers they easily perform the whole pipeline in a few steps. The first of them is to split the data according to the source of batch effect (in our case by run).
 
+```{r read_raw_data, include=FALSE}
+
+# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+```
+
 ```{r split_data}
 
 # The split method splits the given slot according to the indicated information.
@@ -172,7 +168,17 @@ SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
 
 # 3.1. Normalize and apply data integration.
 
-It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811, https://github.com/satijalab/seurat/issues/7585) it doesn't mind to normalize before or after splitting.
+It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
+
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
+
+```{r norm_std, fig.height=6, fig.width=10}
+
+# Standard normalization.
+SCP_data <- NormalizeData(SCP_data)
+SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000)
+SCP_data <- ScaleData(SCP_data)
+```
 
 We now run SCTransform, PCA and the integration.
 
@@ -221,18 +227,32 @@ DimHeatmap(SCP_data, dims = 1:30, balanced = TRUE)
 VizDimLoadings(SCP_data, dims = 1:30, reduction = "pca")
 ```
 
+# 3. Find variable top variable features.
+
+WARING:  Since the data is splitted into 4 layers, is not possible to plot the top variable genes, but we still can run FindVariableFeatures and access the list using VariableFeatrues. 
+
+```{r var_features, fig.height=6, fig.width=10}
+
+# SCP_data <- FindVariableFeatures(SCP_data, selection.method = "vst", nfeatures = 3000, assay = "SCT")
+
+# Genes with differential expression in different cells are good candidates to be biomarkers.
+# Identify the 20 most highly variable genes
+top <- head(VariableFeatures(SCP_data, assay = "SCT",layer = run), 20)
+```
 
 # 4. Clustering.
 
-Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 1 as an appropriate value for clustering.
+Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 0.8 as a appropriate value for clustering.
 
 It is important to notice that a new reduction is created called "harmony". We need to indicate this as the reduction to use in the clustering.
 
 ```{r clustering}
+# Set resolutions range.
+resolutions <- seq(from = 0.1, to = 2, by = 0.1)
 
 # Resolution fine-tuned in a separate Rmd.
 SCP_data <- FindNeighbors(SCP_data, dims = 1:30, reduction = "harmony")
-SCP_data <- FindClusters(SCP_data, resolution = 1) # Default resolution = 0.8
+SCP_data <- FindClusters(SCP_data, resolution = resolutions, ) # Default resolution = 0.8
 SCP_data <- RunUMAP(SCP_data, dims = 1:30, reduction = "harmony")
 ```
 
@@ -275,7 +295,7 @@ merged.SCexp <- JoinLayers(SCP_data, assay = "RNA")
 # Convert Seurat object into a SingleCellExperiment Object for SingleR input.
 merged.SCexp <- as.SingleCellExperiment(merged.SCexp)
 
-SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = parallel::detectCores())
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
 
 SCP_data[["cell.labels"]] <- SingleR.annotation$labels
 ```
@@ -307,7 +327,7 @@ clusters <- as.character(levels(clusters)[clusters])
 # merged.SCexp <- as.SingleCellExperiment(SCP_data)
 
 # We input the cluster vector using the clusters parameter.
-SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = parallel::detectCores())
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
 
 SCP_data[["cluster.labels"]] <- SingleR.annotation$labels
 ```

@@ -56,7 +56,9 @@ plan("multicore", workers = parallel::detectCores())
 
 Load the data and apply the basic pipeline in one line.
 
-```{r get_single_runs}
+SCTransform:
+
+```{r SCTransform}
 
 resolutions = seq(from = 0.1, to = 2, by = 0.1)
   
@@ -71,11 +73,31 @@ test <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds") %>%
   RunUMAP(dims = 1:30, reduction = "harmony", verbose = FALSE)
 ```
 
+Standard normalization:
+
+```{r standard_norm}
+
+resolutions = seq(from = 0.1, to = 2, by = 0.1)
+  
+test <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds") %>% 
+  PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>%
+  split(f = .$orig.ident) %>%
+  NormalizeData(scale.factor = 1e6, assay = "RNA", verbose = FALSE) %>% 
+  FindVariableFeatures(nfeatures = 3000, assay = "RNA", verbose = FALSE) %>%
+  ScaleData(assay = "RNA", vars.to.regress = "percent.mt", verbose = FALSE) %>%
+  RunPCA(assay = "RNA", verbose = FALSE) %>% 
+  IntegrateLayers(method = HarmonyIntegration, verbose = FALSE) %>% 
+  FindNeighbors(dims = 1:20, reduction = "harmony", verbose = FALSE) %>% 
+  FindClusters(resolution = resolutions, verbose = FALSE) %>% 
+  RunUMAP(dims = 1:20, reduction = "harmony", verbose = FALSE)
+```
+
+
 In the script below we created a loop that test all values for resolution in a certain range. It also plots the resulting umaps and storage both the Seurat Objects and plots generated in two different lists (output_list and plot_list). We tested the resolution in a range between 0.4 - 1.2 as the Seurat teams indicates that is suitable for a dataset of up to 3k cells.
 
 ```{r}
 
-clusterMetadata <- grep("SCT_snn_res.\\d+.?\\d*", colnames(test[[]]), value = TRUE)
+clusterMetadata <- grep("_snn_res.\\d+.?\\d*", colnames(test[[]]), value = TRUE)
 
 # Create empty lists to storage data.
 resolution_values <- list()
@@ -111,4 +133,12 @@ for (resValue in clusterMetadata) {
 
 # Plot number of clusters against resolution.
 plot(resolution_values, nClusters)
+```
+
+Session Info.
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
 ```

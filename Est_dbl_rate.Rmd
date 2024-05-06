@@ -127,3 +127,10 @@ BDstats <- regressionCoefficients["ncells", 1:2]
 saveRDS(BDstats, file = "~/Documents/SC_Prostate/Data/BDstats.rds")
 ```
 
+Session Info.
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
+```

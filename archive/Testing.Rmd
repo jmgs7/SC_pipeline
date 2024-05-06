@@ -1,0 +1,560 @@
+---
+title: "Testing"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: # html_notebook
+---
+
+```{r setup, include=FALSE}
+
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries, include = TRUE}
+
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(sctransform)
+library(ggplot2)
+library(ggpubr)
+library(tidyr)
+library(ggrepel)
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(parallel) # detectCores()
+library(future) # Allows parallelization in Seurat.
+library(readODS) # Allows ods file import to add sample info
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = detectCores())
+# Adjust memory allocation per process.
+options(future.globals.maxSize = 2000 * 1024^2) # 2 GB per thread.
+```
+
+# 1. Intro: There is actually batch effect.
+
+We recently found out that some clusters are exclusively formed by cells of a single run, indicanting the presence of batch effect.
+
+```{r read_processed_data, include = FALSE}
+
+SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+```
+
+```{r batch_effect_plot, fig.height=6, fig.width=30}
+
+p1 <- DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p2 <- DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4, group.by = "Sample_Name") + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p3 <- DimPlot(SCP_data, reduction = "umap", label = FALSE, repel = TRUE, label.size = 4, group.by = "orig.ident") + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p1 + p2 + p3
+```
+Note: Cluster 4 is 100% run4 and cluster 15 is 100% run 3. They output an error and we don't want to expend much time on this.
+
+As we can see in the image, cluster 4 and cluster 15 is composed exclusively of cells from run4 and run3, respectively. Also, analyzing the proportions of each run throws an unequal distribution of cells from each batch.
+
+```{r fig.height=6, fig.width=10}
+
+clusters <- levels(SCP_data$seurat_clusters)
+df <- data.frame()
+for(i in 1:length(clusters)){
+  if (clusters[i] != 4 & clusters[i] != 14)  {
+        cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clusters == clusters[i]) %>% .$orig.ident %>% table() /
+    table(SCP_data$orig.ident))
+  
+    cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+  
+    cur_df$cluster <- clusters[i]
+    df <- rbind(df, cur_df)
+  } else {
+    cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clusters == clusters[i]) %>% .$orig.ident %>% table())
+  
+    cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+  
+    cur_df$cluster <- clusters[i]
+    df <- rbind(df, cur_df)
+  }
+}
+
+
+RunFreq.noInt <- ggplot(df, aes(y=Freq, x=cluster, fill=.)) +
+  geom_bar(stat='identity') +
+  scale_y_continuous(expand = c(0,0)) +
+  ylab('normalized proportion') +
+  theme(
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank(),
+    axis.text.x = element_text(angle=45, hjust=1),
+    axis.title.x = element_blank(),
+    legend.title = element_blank(),
+    axis.line.y = element_blank(),
+    axis.line.x = element_blank()
+  )
+RunFreq.noInt
+```
+
+We also re-visualize the PCA plot:
+
+```{r fig.height=6, fig.width=10}
+
+Idents(SCP_data) <- "orig.ident"
+DimPlot(SCP_data, reduction = "pca")
+```
+
+# 2. Introduction to data integration with Seurat.
+
+Seurat offers methods to integrate data from different batches (different sequencing runs, different samples, etc.). In v5, a new method called IntegrateLayers they easily perform the whole pipeline in a few steps. The first of them is to split the data according to the source of batch effect (in our case by run).
+
+```{r read_raw_data, include=FALSE}
+
+SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+```
+
+```{r split_data}
+
+# The split method splits the given slot according to the indicated information.
+SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
+```
+
+# 2.1. Normalize and apply data integration.
+
+It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811) it doesn't mind to normalize before or after splitting.
+
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
+
+```{r norm_std, fig.height=6, fig.width=10}
+
+# Standard normalization.
+SCP_data <- NormalizeData(SCP_data)
+SCP_data <- FindVariableFeatures(SCP_data, nfeatures = 3000)
+SCP_data <- ScaleData(SCP_data)
+```
+
+We now run SCTransform, PCA and the integration.
+
+```{r batch_effect_sct, fig.height=6, fig.width=10}
+
+# Launch sct transform and run PCA.
+SCP_data <- SCTransform(SCP_data, vst.flavor = "v2", vars.to.regress = "percent.mt")
+SCP_data <- RunPCA(SCP_data, assay = "SCT")
+
+# Integration.
+SCP_data <- IntegrateLayers(
+  object = SCP_data, method = HarmonyIntegration,
+  normalization.method = "SCT",
+  verbose = FALSE
+)
+```
+
+There are several methods for integration, but according to some sources (https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1850-9), the best ones are Harmony, Seurat's CCA and scVII (requires setting up a conda environment and installing reticulate, see documentation). We choose Harmony for being well-integrated with Seruat, performing pretty well with low computational effort, and better respecting the data original structure when compared against Seurat's CCA.
+
+If we re-visualize the PCA plot, we appreciate a bigger overlap between runs.
+
+```{r fig.height=6, fig.width=10}
+
+Idents(SCP_data) <- "orig.ident"
+DimPlot(SCP_data, reduction = "pca")
+```
+
+## 2.2. Set dimensionality.
+
+While the elbow appears around the 15th PC, we extend the included PCs up to the 30th following the new guidelines by the Seurat developers after SCTransform normalization implementation.
+
+```{r elbwol_plot, fig.height=6, fig.width=10}
+
+ElbowPlot(SCP_data, ndims = 50, reduction = "pca") # choose 30
+```
+
+The heatmap and the feature plot give us information about the significance and composition of each PC.
+
+```{r PCA_heatmap, fig.height=15, fig.width=10}
+
+DimHeatmap(SCP_data, dims = 1:30, balanced = TRUE, reduction = "pca")
+```
+
+```{r PCA_top_features, fig.height=30, fig.width=15}
+
+VizDimLoadings(SCP_data, dims = 1:30, reduction = "pca")
+```
+
+# 3. Find variable top variable features.
+
+WARING:  Since the data is splitted into 4 layers, is not possible to plot the top variable genes, but we still can run FindVariableFeatures and access the list using VariableFeatrues. 
+
+```{r var_features, fig.height=6, fig.width=10}
+
+# SCP_data <- FindVariableFeatures(SCP_data, selection.method = "vst", nfeatures = 3000, assay = "SCT")
+
+# Genes with differential expression in different cells are good candidates to be biomarkers.
+# Identify the 20 most highly variable genes
+top <- head(VariableFeatures(SCP_data, assay = "SCT",layer = run), 20)
+```
+
+# 4. Clustering.
+
+Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 0.8 as a appropriate value for clustering.
+
+It is important to notice that a new reduction is created called "harmony". We need to indicate this as the reduction to use in the clustering.
+
+```{r clustering}
+
+# Resolution fine-tuned in a separate Rmd.
+SCP_data <- FindNeighbors(SCP_data, dims = 1:30, reduction = "harmony")
+SCP_data <- FindClusters(SCP_data, resolution = 0.8, ) # Default resolution = 0.8
+SCP_data <- RunUMAP(SCP_data, dims = 1:30, reduction = "harmony")
+```
+
+We now appreciate a more homogeneous distribution of the cells from each run among the clusters:
+
+```{r cluster_visualization, fig.height=6, fig.width=30}
+
+p1 <- DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p2 <- DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4, group.by = "Sample_Name") + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p3 <- DimPlot(SCP_data, reduction = "umap", label = FALSE, repel = TRUE, label.size = 4, group.by = "orig.ident") + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+
+p1 + p2 + p3
+```
+
+```{r fig.height=6, fig.width=10}
+clusters <- levels(SCP_data$seurat_clusters)
+df <- data.frame()
+for(i in 1:length(clusters)){
+      cur_df <- as.data.frame(SCP_data@meta.data %>% subset(seurat_clusters == clusters[i]) %>% .$orig.ident %>% table() /
+  table(SCP_data$orig.ident))
+
+  cur_df$Freq <- cur_df$Freq * 1/(sum(cur_df$Freq))
+
+  cur_df$cluster <- clust 	118 	ers[i]
+  df <- rbind(df, cur_df)
+}
+
+RunFreq.Int <- ggplot(df, aes(y=Freq, x=cluster, fill=.)) +
+  geom_bar(stat='identity') +
+  scale_y_continuous(expand = c(0,0)) +
+  ylab('normalized proportion') +
+  theme(
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank(),
+    axis.text.x = element_text(angle=45, hjust=1),
+    axis.title.x = element_blank(),
+    legend.title = element_blank(),
+    axis.line.y = element_blank(),
+    axis.line.x = element_blank()
+  )
+RunFreq.Int
+```
+
+Proportions are a bit more equilibrated now.
+
+```{r}
+
+RunFreq.noInt + RunFreq.Int
+```
+
+## 4.1. Cluster QC.
+
+Cluster QC shows homogeneous characteristics across the clusters with the exception of cluster 22 (abnormal low number of features). Despite what it might look like, this actually conforms and advantage, as if that specific group of cells give inconsistent results, because they have been isolated in their own cluster we can move forward just ignoring or removing it.
+
+```{r cluster_QC, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(SCP_data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) + NoLegend()
+
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(SCP_data, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + NoLegend() + plot2 + NoLegend()
+```
+
+# 5. Annotation.
+
+## 5.1. By-cell annotation.
+
+Cell-by-cell annotation identifies 30 different cell types based on the HumanPrimaryCellAtlas, which distribution pretty much coincides with the cluster layout.
+
+For this step, we now need to join the layers before exporting to a SCExperiment object.
+
+```{r annotation}
+
+# Using celldex and SingleR packages.
+# Download reference data from celldex.
+reference <- HumanPrimaryCellAtlasData()
+
+# Join layers before conversion. SingleR uses the RNA assay.
+merged.SCexp <- JoinLayers(SCP_data, assay = "RNA") 
+
+# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
+merged.SCexp <- as.SingleCellExperiment(merged.SCexp)
+
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, num.threads = detectCores())
+
+SCP_data[["cell.labels"]] <- SingleR.annotation$labels
+```
+
+```{r annotation_vis_cell, fig.height=6, fig.width=10}
+
+DimPlot(SCP_data, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+## 5.2. By-cluster annotation.
+
+We create our own composite cluster names by adding the cluster annotation to the cluster number provided by Suerat. Thus, what we see is an estimation of the cell type that better fits the genetic landscape of each cluster.
+
+```{r cluster_annotation}
+
+# Obtaining a vector containing the cluster of each cell in order.
+
+# Get the factor contained in the SeuratObject with all this information.
+clusters <- SCP_data@meta.data[["seurat_clusters"]]
+
+# The cluster information for each cell is contain as a factor which levels coincide with the total number of clusters found by FindClusters(). An approach to transform this factor into a character vector is the following:
+# Obtain the list of clusters with levels(clusters). This outputs a character vector containing the levles of the factor. After that, we use the factor itself as an index to access the levels vector. When using a factor as an index, R does not use the labels itself (which in this case are string, so if used as indexes would cause an error), but the internal numeric index the factor contains. That way, for each cluster label associated with a cell in the factor, we access its numeric index and map it to the levels vectors (which coincides), thus obtaining each cell label as an unique character value. Each cell label is then storage as a character (the as.character is added as a control method since SingleR only admits strings as labels) in a vector. The vector contains the cluster label for each cell as a character value in the same order as each cell appears in the dataset, so the by-cluster annotation doesn't assign the cells to an incorrect cluster.
+clusters <- as.character(levels(clusters)[clusters])
+
+# reference <- HumanPrimaryCellAtlasData()
+
+# merged.SCexp <- as.SingleCellExperiment(SCP_data)
+
+# We input the cluster vector using the clusters parameter.
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = detectCores())
+
+SCP_data[["cluster.labels"]] <- SingleR.annotation$labels
+```
+
+```{r set_ids}
+
+# We composite the cluster name. That way when 2 clusters' names are the same Seurat doesn't merge the labels.
+
+# Get clusters levels accessing the SeuratObject variable as a df and then accessing the df as a column.
+cluster_number <- levels(SCP_data[["seurat_clusters"]][1, ])
+
+# Get annotation labels.
+cluster_annotation <- SingleR.annotation$labels
+
+# Since cluster levels and labels are in the same order, we composite the new names using paste0 (sort of equivalent to fstrings in python).
+new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
+
+# Add names to each value of the clusters id vector so Seurat can take it as a valid input for RenameIdents.
+names(new.clusters.ids) <- levels(SCP_data)
+SCP_data <- RenameIdents(SCP_data, new.clusters.ids)
+SCP_data[["cell.cluster.labels"]] <- Idents(SCP_data)
+```
+
+```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+
+DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+# 6. Exploratory analysis.
+
+Here, we start the more deep and accurate analysis of the dataset.
+
+We repeat this analysis to follow the new guidelines provided here: https://satijalab.org/seurat/articles/parsebio_sketch_integration
+
+As recommended by Soneson et all. and Crowell et al., we use an aggregation-based (pseudobulk) workflow using the raw counts. We aggregate all cells within the same cell type and sample using the AggregateExpression function. This returns a Seurat object where each ‘cell’ represents the pseudobulk profile of one cell type in one individual.
+
+## 6.1. Finding cluster enriched in T samples.
+
+First, we would take a look at the proportion of cells from the different groups (T, N, NAT and AT) on each cluster.
+
+For that we will plot the frequency of each sample oAs recommended by Soneson et all. and Crowell et al., we use an aggregation-based (pseudobulk) workfln each cluster (that is, the fraction of the total cells of that given type present on each cluster).
+
+```{r T_enrichment_calc, fig.height=40, fig.width=10}
+
+# Sumarize() performs an operation over a row of a dataframe, for example mean() or count n().
+
+# Slots are dataframes, so it can be used by dplyr.
+prop_cell_by_sample <- SCP_data@meta.data %>% group_by(Sample_Name, cell.cluster.labels) %>% 
+  summarise(n = n()) %>% # For each cluster, group the cells from the same sample together and count them.
+  ungroup() %>% group_by(Sample_Name) %>%
+  mutate(freq = n / sum(n)) %>% # Group them now by sample, add up the total number of cells from that sample (regardless of the cluster they belong to). Then, divide each n value (number of cells of a sample in a certain cluster), obtaining which fraction of the total cells of that given type is present on each cluster.
+  left_join(SCP_data@meta.data %>% select(Sample_Name, Sample_Group) %>% unique()) # Add metadata info available for the data, select only the Sample_Name and Sample_Group fields and delete duplicates.
+```
+
+For now, will be only focus on comparing the confirmed tumoral (T) and healthy (N) samples.
+
+```{r boxplot, fig.height=40, fig.width=10}
+
+# Filter only the desired groups "N" and "T"
+prop_cell_by_sample_filtered <- prop_cell_by_sample %>%
+  filter(Sample_Group %in% c("N", "T"))
+```
+
+We apply the Wilcoxon test to find out significant differences between sample groups. We found out that the cluster 18 (annotated as endothelial cells) is the only group with a significant enrichment in tumoral cells.
+
+```{r}
+
+# Extract data for Sample_Group "T" and other groups
+
+group_T <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "T", ]
+group_N <- prop_cell_by_sample[prop_cell_by_sample$Sample_Group == "N", ]
+
+# Perform t-test for each cluster
+clusters <- levels(prop_cell_by_sample$cell.cluster.labels)
+p_values <- numeric(length(clusters))
+
+for (i in seq_along(clusters)) {
+  
+  cluster_data_T <- group_T[group_T$cell.cluster.labels == clusters[i], "freq"] 
+  
+  cluster_data_N <- group_N[group_N$cell.cluster.labels == clusters[i], "freq"]
+
+  # Perform test 
+  test_result <- wilcox.test(cluster_data_T$freq, cluster_data_N$freq)
+
+  # Store p-value 
+  p_values[i] <- test_result$p.value 
+  
+  }
+
+# Identify clusters with significant enrichment (e.g., p-value < 0.05)
+
+enriched_clusters <- clusters[p_values < 0.05]
+
+# Print or visualize the enriched clusters
+
+print(enriched_clusters) 
+print(p_values)
+```
+
+Unfortunaletly, after applying integration, no cluster is significant. We plot the results along the statistics in a paper-ready figure.
+
+```{r boxplot_publish, fig.height=20, fig.width=15}
+
+# Plot only the desired groups
+enriched_clusters <- ggboxplot(prop_cell_by_sample_filtered, x = "Sample_Group", y = "freq",
+          color = "Sample_Group",  palette = "jco",
+          add = "jitter") +
+facet_wrap(~cell.cluster.labels, scales = "free", nrow = 6) +
+theme(legend.position = "none") +
+xlab("Sample Group") + ylab("Frequency") +
+stat_compare_means(aes(label = ..p.signif..), label.x = 1.5)
+
+enriched_clusters
+```
+
+### 6.1.1. Finding differentially expressed genes in tumoral-enriched clusters.
+
+Anyway, in order to test this new method, we will now perform a DE analysis on cluster 18 by comparing cells coming from T samples (tumoral) vs healthy samples (N).
+
+```{r DE_analysis}
+
+# By-cell method (uses integrated and SCTransformed data)
+SCP_data <- PrepSCTFindMarkers(SCP_data)
+cluster18.markers.cell <- FindMarkers(SCP_data, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", subset.ident = "18-T_cells", assay = "SCT", recorrect_umi = FALSE)
+
+# Using pseudobulk.
+bulk <- AggregateExpression(SCP_data, return.seurat = T, slot = "counts", assays = "RNA", group.by = c("seurat_clusters",
+    "Sample_Name", "Sample_Group"))
+
+# We don't know why it adds a "g" after pseudobulking. 
+cluster18 <- subset(bulk, seurat_clusters == "g18")
+# As we are using bulks instead of cells, we need to change the test to a more appropiate one.
+cluster18.markers.bulk <- FindMarkers(cluster18, ident.1 = "T", ident.2 = "N", group.by = "Sample_Group", test.use = "DESeq2")
+```
+
+Plot cell-based DE:
+
+```{r cell_DE, fig.height=6, fig.width=10}
+
+FC = log2(1.5) # Set FC threshold.
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative).
+cluster18.markers.cell$diffexpressed <- "NO"
+# if FC > 1.5 (log2FC > ~0.6) and pvalue < 0.05, set as "UP".
+cluster18.markers.cell$diffexpressed[cluster18.markers.cell$avg_log2FC > FC & cluster18.markers.cell$p_val < 0.05] <- "UP"
+# if FC < 0.666 (invers 1/1.5 calculated as log2FC < ~-0.6) and pvalue < 0.05, set as "DOWN".
+cluster18.markers.cell$diffexpressed[cluster18.markers.cell$avg_log2FC < -FC & cluster18.markers.cell$p_val < 0.05] <- "DOWN"
+
+cluster18.markers.cell <- cluster18.markers.cell %>%
+  arrange(p_val) %>%
+  mutate(gene_symbol = rownames(.)) %>%
+  group_by(diffexpressed) %>%
+  mutate(delabel = if_else(diffexpressed %in% c("UP", "DOWN") & row_number() <= 10, gene_symbol, NA)) %>%
+  ungroup()
+
+cell.DE <- ggplot(cluster18.markers.cell, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-FC, FC), col = "grey", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "grey", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), # to set the colours of our variable
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + # to set the labels in case we want to overwrite the categories from the dataframe (UP, DOWN, NO)
+  labs(color = NULL, #legend_title,
+       x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(-10, 10, 2)) + # to customise the breaks in the x axis
+  geom_text_repel(box.padding = 0.6, max.overlaps = Inf) # To show all labels
+```
+
+Plot bulk-based DE: 
+
+```{r bulk_DE, fig.height=6, fig.width=10}
+
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2fc respectively positive or negative).
+cluster18.markers.bulk$diffexpressed <- "NO"
+# if FC > 1.5 (log2FC > ~0.6) and pvalue < 0.05, set as "UP".
+cluster18.markers.bulk$diffexpressed[cluster18.markers.bulk$avg_log2FC > FC & cluster18.markers.bulk$p_val < 0.05] <- "UP"
+# if FC < 0.666 (invers 1/1.5 calculated as log2FC < ~-0.6) and pvalue < 0.05, set as "DOWN".
+cluster18.markers.bulk$diffexpressed[cluster18.markers.bulk$avg_log2FC < -FC & cluster18.markers.bulk$p_val < 0.05] <- "DOWN"
+
+cluster18.markers.bulk <- cluster18.markers.bulk %>%
+  arrange(p_val_adj) %>%
+  mutate(gene_symbol = rownames(.)) %>%
+  group_by(diffexpressed) %>%
+  mutate(delabel = if_else(diffexpressed %in% c("UP", "DOWN") & row_number() <= 10, gene_symbol, NA)) %>%
+  ungroup()
+
+bulk.DE <- ggplot(cluster18.markers.bulk, aes(x = avg_log2FC, y = -log10(p_val), col = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-FC, FC), col = "grey", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "grey", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), # to set the colours of our variable
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + # to set the labels in case we want to overwrite the categories from the dataframe (UP, DOWN, NO)
+  labs(color = NULL, #legend_title,
+       x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(-10, 10, 2)) + # to customise the breaks in the x axis
+  geom_text_repel(box.padding = 0.6, max.overlaps = Inf) # To show all labels
+```
+
+Compare:
+
+```{r fig.height=6, fig.width=20}
+
+cell.DE + bulk.DE
+```
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
+```
