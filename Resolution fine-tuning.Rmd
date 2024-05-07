@@ -82,9 +82,9 @@ resolutions = seq(from = 0.1, to = 2, by = 0.1)
 test <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds") %>% 
   PercentageFeatureSet(pattern = "^MT-", col.name = 'percent.mt') %>%
   split(f = .$orig.ident) %>%
-  NormalizeData(scale.factor = 1e6, assay = "RNA", verbose = FALSE) %>% 
-  FindVariableFeatures(nfeatures = 3000, assay = "RNA", verbose = FALSE) %>%
-  ScaleData(assay = "RNA", vars.to.regress = "percent.mt", verbose = FALSE) %>%
+  NormalizeData(scale.factor = 1e6, assay = "RNA") %>% 
+  FindVariableFeatures(nfeatures = 3000, assay = "RNA") %>%
+  ScaleData(assay = "RNA", vars.to.regress = c("percent.mt")) %>%
   RunPCA(assay = "RNA", verbose = FALSE) %>% 
   IntegrateLayers(method = HarmonyIntegration, verbose = FALSE) %>% 
   FindNeighbors(dims = 1:20, reduction = "harmony", verbose = FALSE) %>% 
@@ -133,12 +133,4 @@ for (resValue in clusterMetadata) {
 
 # Plot number of clusters against resolution.
 plot(resolution_values, nClusters)
-```
-
-Session Info.
-
-```{r session_info}
-
-sessionInfo()
-RNGkind()
 ```

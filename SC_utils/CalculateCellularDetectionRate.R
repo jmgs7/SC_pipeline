@@ -14,10 +14,14 @@
 #'
 CalculateCDR <- function(SeuratObject) {
 
-  SeuratObject$CDR <- scale(colMeans(as.matrix(SeuratObject@assays$RNA@layers$counts) > 0))
+
+  mtry <- try(SeuratObject$CDR <- scale(colMeans(as.matrix(SeuratObject@assays$RNA@layers$counts) > 0)), silent = TRUE)
+
+  if (inherits(mtry, "try-error")) {
+    SeuratObject$CDR <- scale(colMeans(as.matrix(SeuratObject@assays$RNA@counts) > 0))
+  }
 
   return(SeuratObject)
-
 }
 
 # Credit:

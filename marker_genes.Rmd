@@ -56,7 +56,7 @@ SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.r
 
 ## 2 Join layers and perform normalization.
 
-Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves) or log-transformed data, we only need to join the data layers, as there is no difference normalizing before or after the splitting (https://github.com/satijalab/seurat/issues/7585).
+Since recent discussion indicates that according to the use case sometimes is better to work on raw, non-integrated values (https://github.com/satijalab/seurat/discussions/5452?utm_source=pocket_saves), we also perform the standard normalization workflow.
 
 ```{r norm_std, fig.height=6, fig.width=10}
 
@@ -64,7 +64,7 @@ Since recent discussion indicates that according to the use case sometimes is be
 SCP_data <- JoinLayers(SCP_data, assay = "RNA")
 ```
 
-## 3. Find markers for each gene.
+## 3. Find markers for each cluster.
 
 According to the benchmark performed by Sonenson, C. & Robison, D. (2018), the top method for DE with scRNA-seq data is MAST using CPMs (Counts Per Million) and taking into account the Cell Detection Rate (CDR). CDR is described as the proportion of genes expressed in a single cell.
 
@@ -83,7 +83,6 @@ cluster_markers <- FindAllMarkers(object = SCP_data,
                                   only.pos = TRUE, # Cell markers can only be positive markers.
                                   min.pct = 0.5, # We consider that a marker gene should be expressed in at least 50% of the cells.
                                   logfc.threshold = log2(1.5) # Filter by FC threshold.
-          
 )
 ```
 

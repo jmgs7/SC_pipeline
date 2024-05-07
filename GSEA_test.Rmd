@@ -1,0 +1,126 @@
+---
+title: "GSEA test"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: # html_notebook
+---
+
+```{r setup, include=FALSE}
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+
+```{r libraries, include = FALSE}
+library(Seurat)
+library(ggplot2)
+library(future) # Allows parallelization in Seurat.
+
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = parallel::detectCores()) # Adjust threads for memory use.
+
+# Import user's libraries.
+source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/scGSEAmarkers.R")
+```
+
+
+# GSEA analysis as helper for cluster manuel annotation.
+
+The purpose of this script is to obtain a GSEA enrichment analysis for all the positive markers of each of the clusters that are expressed at least on 50% of the cells.
+
+## 1. Import data.
+
+```{r import_raw_data}
+
+SCP_data <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+```
+
+## 2. Plot clusters.
+
+```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+
+DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+## 3. Get foldchange.
+
+```{r}
+
+# Join the per-run splitted layers.
+SCP_data <- JoinLayers(SCP_data, assay = "RNA")
+```
+
+
+We use the FindAllMarkers function to easily obtain the foldchange for the desired genes. The use of the wilcoxon test has no impact, is just for optimizing computation time.
+
+We stablish a threshold for features that are expressed in at least 50% of the cells (a marker should be widely expressed).
+
+We base our analysis on the C8 dataset of GSEA's MSigDB containing cell identity markers obtained from SC experiments.
+
+```{r}
+
+cluster_markers <- FindAllMarkers(object = SCP_data,
+                                  test.use = "wilcox", # Use wilcox as DE method as it is well-optimized with presto.
+                                  assay = "RNA",
+                                  slot = "data", # Use log-transformed CPMs.
+                                  # We need all genes for the enrichment analysis:
+                                  only.pos = FALSE,
+                                  min.pct = 0.5, # We keep the pct threshold to avoid underrepresented genes.
+                                  logfc.threshold = 0,
+                                  verbose = TRUE
+)
+
+# Load the pathways database from GSEA.
+reference_markers <- fgsea::gmtPathways(gmt.file = "~/Documents/SC_Prostate/Data/cell_markers_GSEA.gmt")
+```
+We now compute the GSEA analysis using both positive and negative markers to increase statistical power but the output will only contain cell identities based on positive markers (entries with a positive Normalized Enrichment Score or NES) and we will keep only results with a p-adj below 1e-6.
+
+```{r}
+
+result_list <- scGSEAmarkers(cluster_markers, reference_markers, padj.threshold = 1e-6, only.pos = TRUE, workers = parallel::detectCores())
+```
+Export each cluster information as a single data.frame:
+
+```{r}
+
+path <- "~/Documents/SC_Prostate/Output/GSEA_markers/"
+
+for (cluster in names(result_list)) {
+  df <- result_list[[cluster]]
+  df <- apply(df,2,as.character) # Transform each column to character to avoid conflicts with lists.
+  filename <- paste0(path, cluster, ".csv")
+  write.csv(df, file = filename, row.names = FALSE)
+  cat("Exported dataframe", cluster, "to", filename, "\n")
+}
+
+```
+
+Session Info.
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
+```
