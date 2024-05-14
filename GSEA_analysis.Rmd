@@ -1,5 +1,5 @@
 ---
-title: "GSEA test"
+title: "GSEA analysis by cluster"
 author: "José Manuel Gómez Silva"
 date: "`r Sys.Date()`"
 output: # html_notebook
@@ -50,11 +50,12 @@ source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/scGSEAmarkers.R")
 
 The purpose of this script is to obtain a GSEA enrichment analysis for all the positive markers of each of the clusters that are expressed at least on 50% of the cells.
 
-## 1. Import data.
+## 1. Import data and set the identities.
 
 ```{r import_raw_data}
 
 SCP_data <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.1)
 ```
 
 ## 2. Plot clusters.
@@ -105,7 +106,7 @@ Export each cluster information as a single data.frame:
 
 ```{r}
 
-path <- "~/Documents/SC_Prostate/Output/GSEA_markers/"
+path <- "~/Documents/SC_Prostate/Output/GSEA_markers_res=1/"
 
 for (cluster in names(result_list)) {
   df <- result_list[[cluster]]

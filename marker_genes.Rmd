@@ -47,11 +47,12 @@ options(future.globals.maxSize = 2500 * 1024^2) # 2.5 GB per thread
 source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/CalculateCellularDetectionRate.R")
 ```
 
-## 1. Load the data.
+## 1. Load the data and set the identities.
 
 ```{r load_raw_data, include = FALSE}
 
-SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.0.5)
 ```
 
 ## 2 Join layers and perform normalization.
@@ -91,7 +92,7 @@ Write the output to a csv file.
 ```{r}
 
 # Save to csv.
-write.csv(cluster_markers, "~/Documents/SC_Prostate/Output/cluster_markers.csv", row.names = TRUE)
+write.csv(cluster_markers, "~/Documents/SC_Prostate/Output/cluster_markers_res=0.5.csv", row.names = TRUE)
 ```
 
 Session Info.

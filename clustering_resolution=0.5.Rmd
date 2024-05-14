@@ -1,0 +1,165 @@
+---
+title: "Clustering with resolution = 0.5"
+author: "José Manuel Gómez Silva"
+date: "`r Sys.Date()`"
+output: # html_notebook
+---
+
+```{r setup, include=FALSE}
+
+all_times <- list() # store the time for each chunk
+knitr::knit_hooks$set(time_it = local({
+  now <- NULL
+  function(before, options) {
+    if (before) {
+      now <<- Sys.time()
+    } else {
+      res <- difftime(Sys.time(), now, units = "secs")
+      all_times[[options$label]] <<- res
+    }
+  }
+}))
+
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE,
+  echo = TRUE,
+  engine.opts = list(bash = "-l")
+)
+```
+
+```{r libraries, include = TRUE}
+
+library(Seurat)
+library(ggplot2)
+library(ggrepel)
+library(celldex) # Cell annotation.
+library(SingleR) # Cell annotation.
+library(future) # Allows parallelization in Seurat.
+
+# Set up Seurat pararell computing.
+options(parallelly.fork.enable = TRUE)
+plan("multicore", workers = parallel::detectCores())
+```
+
+This document is an annex to SC_Prostate_analysis markdown showing the clustering process using a resolution value of 0.5.
+
+# Load data
+
+```{r}
+
+# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.0.5)
+```
+
+## 5.1. Cluster QC.
+
+Cluster QC shows homogeneous characteristics across the clusters with the exception of cluster 22 (abnormal low number of features). Despite what it might look like, this actually conforms and advantage, as if that specific group of cells give inconsistent results, because they have been isolated in their own cluster we can move forward just ignoring or removing it.
+
+```{r cluster_QC, fig.height=6, fig.width=10}
+
+# Visualize QC metrics as a violin plot
+VlnPlot(SCP_data, features = "nFeature_RNA") + NoLegend()
+VlnPlot(SCP_data, features = "nCount_RNA") + NoLegend()
+VlnPlot(SCP_data, features = "percent.mt") + NoLegend()
+
+# Zoom in on nFeature_RNA violin plot.
+VlnPlot(SCP_data, features = "nFeature_RNA", ncol = 1) + ylim(0, 2500) + NoLegend()
+
+# Visualize relationships in metadata to detect outliers with FeatureScatter function
+plot1 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + NoLegend() + plot2 + NoLegend()
+```
+
+# 6. Annotation.
+
+## 6.1. By-cell annotation.
+
+Cell-by-cell annotation identifies 30 different cell types based on the HumanPrimaryCellAtlas, which distribution pretty much coincides with the cluster layout.
+
+```{r annotation_vis_cell, fig.height=6, fig.width=10}
+
+DimPlot(SCP_data, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+## 6.2. By-cluster annotation.
+
+We create our own composite cluster names by adding the cluster annotation to the cluster number provided by Suerat. Thus, what we see is an estimation of the cell type that better fits the genetic landscape of each cluster.
+
+```{r get_reference}
+
+# Using celldex and SingleR packages.
+# Download reference data from celldex.
+reference <- HumanPrimaryCellAtlasData()
+
+# Join layers before conversion. SingleR uses the RNA assay.
+merged.SCexp <- JoinLayers(SCP_data, assay = "RNA") 
+
+# Convert Seurat object into a SingleCellExperiment Object for SingleR input.
+merged.SCexp <- as.SingleCellExperiment(merged.SCexp)
+```
+
+
+```{r cluster_annotation}
+# Obtaining a vector containing the cluster of each cell in order.
+
+# Get the factor contained in the SeuratObject with all this information.
+clusters <- SCP_data@meta.data[["RNA_snn_res.0.5"]]
+
+# The cluster information for each cell is contain as a factor which levels coincide with the total number of clusters found by FindClusters(). An approach to transform this factor into a character vector is the following:
+# Obtain the list of clusters with levels(clusters). This outputs a character vector containing the levles of the factor. After that, we use the factor itself as an index to access the levels vector. When using a factor as an index, R does not use the labels itself (which in this case are string, so if used as indexes would cause an error), but the internal numeric index the factor contains. That way, for each cluster label associated with a cell in the factor, we access its numeric index and map it to the levels vectors (which coincides), thus obtaining each cell label as an unique character value. Each cell label is then storage as a character (the as.character is added as a control method since SingleR only admits strings as labels) in a vector. The vector contains the cluster label for each cell as a character value in the same order as each cell appears in the dataset, so the by-cluster annotation doesn't assign the cells to an incorrect cluster.
+clusters <- as.character(levels(clusters)[clusters])
+
+# reference <- HumanPrimaryCellAtlasData()
+
+# # Join layers before conversion. SingleR uses the RNA assay.
+# merged.SCexp <- JoinLayers(SCP_data, assay = "RNA") 
+# merged.SCexp <- as.SingleCellExperiment(SCP_data)
+
+# We input the cluster vector using the clusters parameter.
+SingleR.annotation <- SingleR(test = merged.SCexp, ref = reference, assay.type.test = "logcounts", labels = reference$label.main, clusters = clusters, num.threads = parallel::detectCores())
+
+SCP_data[["cluster.labels_res=0.5"]] <- SingleR.annotation$labels
+```
+
+```{r set_ids}
+
+# We composite the cluster name. That way when 2 clusters' names are the same Seurat doesn't merge the labels.
+
+# Get clusters levels accessing the SeuratObject variable as a df and then accessing the df as a column.
+cluster_number <- levels(SCP_data[["RNA_snn_res.0.5"]][1, ])
+
+# Get annotation labels.
+cluster_annotation <- SingleR.annotation$labels
+
+# Since cluster levels and labels are in the same order, we composite the new names using paste0 (sort of equivalent to fstrings in python).
+new.clusters.ids <- paste0(cluster_number, "-", cluster_annotation)
+
+# Add names to each value of the clusters id vector so Seurat can take it as a valid input for RenameIdents.
+names(new.clusters.ids) <- levels(SCP_data)
+SCP_data <- RenameIdents(SCP_data, new.clusters.ids)
+SCP_data[["cell.cluster.labels_res=0.5"]] <- Idents(SCP_data)
+```
+
+```{r cluster_annotation_vis, fig.height=6, fig.width=10}
+
+DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+```{r save_processed_data, include=FALSE}
+
+saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+```
+
+Session Info.
+
+```{r session_info}
+
+sessionInfo()
+RNGkind()
+```

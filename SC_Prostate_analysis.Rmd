@@ -41,7 +41,6 @@ library(dplyr)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
 library(future) # Allows parallelization in Seurat.
-library(readODS) # Allows ods file import to add sample info
 
 # Set up Seurat pararell computing.
 options(parallelly.fork.enable = TRUE)
