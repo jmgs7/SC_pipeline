@@ -51,6 +51,6 @@ SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.r
 cells_per_sample <- SCP_data@meta.data %>% group_by(Sample_Name) %>% summarise(n = n())
 
 # Write the table of cells per sample.
-write.table(cells_by_sample, file = "~/Documents/SC_Prostate/Output/cells_per_sample.csv", row.names = FALSE)
+write.table(cells_per_sample, file = "~/Documents/SC_Prostate/Output/cells_per_sample.csv", row.names = FALSE)
 ```
 

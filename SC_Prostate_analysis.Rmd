@@ -37,6 +37,7 @@ knitr::opts_chunk$set(
 library(Seurat)
 library(ggplot2)
 library(ggrepel)
+library(dplyr)
 library(celldex) # Cell annotation.
 library(SingleR) # Cell annotation.
 library(future) # Allows parallelization in Seurat.
@@ -156,7 +157,34 @@ VlnPlot(SCP_data, features = "percent.mt", group.by = "Sample_Name") + NoLegend(
 
 Apparently, run2 and run4 have higher minimum counts than run1 and run3. This could led to batch effect that will be corrected in later steps. Despite this, samples and run appear to have a pretty similar distribution of QC metrics.
 
-# 3. Normalize and remove batch effect.
+## 3.1. Removal of low cell count samples.
+
+If we check the cell number per samples, some of them have specially low cell counts. To avoid this low-informative samples, we establish a threshold of at least 100 cels for a sample to be considered for the analyis.
+
+```{r calculate_cells_sample}
+cells_per_sample <- SCP_data@meta.data %>% group_by(Sample_Name) %>% summarise(Cells = n())
+cells_per_sample
+```
+
+```{r plot_cells_sample, fig.height=6, fig.width=10}
+
+ggplot(cells_per_sample, aes(x=Sample_Name, y=Cells, fill = Sample_Name)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_hline(aes(yintercept=100), linetype="dashed", color="black") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)
+        )
+  
+```
+```{r filter_samples}
+
+filteredSamples <- cells_per_sample %>% filter(Cells>=100) %>% select(Sample_Name) %>% unlist(.)
+SCP_data <- subset(SCP_data, Sample_Name %in% filteredSamples)
+SCP_data
+```
+
+# 4. Normalize and remove batch effect.
 
 Batch effect is considered the presence of certain unique characteristics within a specific dataset that make it differentiable from the rest when merging all the data. As we are merging data from different runs, variations in the samples processing and further cell manipulation and sequencing could induce those batch effect.
 
@@ -170,7 +198,7 @@ Seurat offers methods to integrate data from different batches (different sequen
 SCP_data[["RNA"]] <- split(SCP_data[["RNA"]], f = SCP_data$orig.ident)
 ```
 
-# 3.1. Normalize and apply data integration.
+# 4.1. Normalize and apply data integration.
 
 It is necessary to normalize the data before integration. According to maintainers (https://github.com/satijalab/seurat/issues/4811, https://github.com/satijalab/seurat/issues/7585) it doesn't mind to normalize before or after splitting.
 
@@ -203,7 +231,7 @@ Idents(SCP_data) <- "orig.ident"
 DimPlot(SCP_data, reduction = "pca")
 ```
 
-## 3.2. Set dimensionality.
+## 4.2. Set dimensionality.
 
 While the elbow appears around the 15th PC, we extend the included PCs up to the 20th following the guidelines by the Seurat developers.
 
@@ -211,15 +239,6 @@ While the elbow appears around the 15th PC, we extend the included PCs up to the
 
 ElbowPlot(SCP_data, ndims = 50) # choose 20
 ```
-
-The JackStraw test allows us to asses the significance of each component:
-
-```{r jackstraw, fig.height=6, fig.width=10}
-
-JackStraw(SCP_data, reduction = "pca", assay = "RNA", dims = 50)
-JackStrawPlot(SCP_data, reduction = "pca", dims = 1:50)
-```
-
 
 The heatmap and the feature plot give us information about the significance and composition of each PC.
 
@@ -234,7 +253,7 @@ VizDimLoadings(SCP_data, dims = 1:20, reduction = "pca")
 ```
 
 
-# 4. Clustering.
+# 5. Clustering.
 
 Clustering resolution fine-tuning is performed by a separated .Rmd file (Resolution fine-tuning.Rmd), giving 1 as an appropriate value for clustering.
 
@@ -242,14 +261,16 @@ It is important to notice that a new reduction is created called "harmony". We n
 
 ```{r clustering}
 
+resolutions = c(0.1, 0.5, 1)
+
 # Resolution fine-tuned in a separate Rmd.
 SCP_data <- FindNeighbors(SCP_data, dims = 1:20, reduction = "harmony")
-SCP_data <- FindClusters(SCP_data, resolution = 1) # Default resolution = 0.8
+SCP_data <- FindClusters(SCP_data, resolution =  resolutions) # Default resolution = 0.8
 SCP_data <- RunUMAP(SCP_data, dims = 1:20, reduction = "harmony")
 ```
 
 
-## 4.1. Cluster QC.
+## 5.1. Cluster QC.
 
 Cluster QC shows homogeneous characteristics across the clusters with the exception of cluster 22 (abnormal low number of features). Despite what it might look like, this actually conforms and advantage, as if that specific group of cells give inconsistent results, because they have been isolated in their own cluster we can move forward just ignoring or removing it.
 
@@ -269,9 +290,9 @@ plot2 <- FeatureScatter(SCP_data, feature1 = "nCount_RNA", feature2 = "nFeature_
 plot1 + NoLegend() + plot2 + NoLegend()
 ```
 
-# 5. Annotation.
+# 6. Annotation.
 
-## 5.1. By-cell annotation.
+## 6.1. By-cell annotation.
 
 Cell-by-cell annotation identifies 30 different cell types based on the HumanPrimaryCellAtlas, which distribution pretty much coincides with the cluster layout.
 
@@ -297,7 +318,7 @@ SCP_data[["cell.labels"]] <- SingleR.annotation$labels
 DimPlot(SCP_data, reduction = "umap", group.by = "cell.labels", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
 ```
 
-## 5.2. By-cluster annotation.
+## 6.2. By-cluster annotation.
 
 We create our own composite cluster names by adding the cluster annotation to the cluster number provided by Suerat. Thus, what we see is an estimation of the cell type that better fits the genetic landscape of each cluster.
 
