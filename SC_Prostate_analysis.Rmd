@@ -121,7 +121,7 @@ saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 
 ```{r load_raw_data, include = FALSE}
 
-# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 ```
 
 

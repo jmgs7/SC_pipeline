@@ -52,7 +52,7 @@ source(file = "~/Documents/SC_Prostate/Scripts/SC_utils/CalculateCellularDetecti
 ```{r load_raw_data, include = FALSE}
 
 # SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
-SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.0.5)
+SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.0.1)
 ```
 
 ## 2 Join layers and perform normalization.
@@ -92,7 +92,7 @@ Write the output to a csv file.
 ```{r}
 
 # Save to csv.
-write.csv(cluster_markers, "~/Documents/SC_Prostate/Output/cluster_markers_res=0.5.csv", row.names = TRUE)
+write.csv(cluster_markers, "~/Documents/SC_Prostate/Output/cluster_markers_res=0.1.csv", row.names = TRUE)
 ```
 
 Session Info.

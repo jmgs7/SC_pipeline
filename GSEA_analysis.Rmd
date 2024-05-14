@@ -54,8 +54,8 @@ The purpose of this script is to obtain a GSEA enrichment analysis for all the p
 
 ```{r import_raw_data}
 
-SCP_data <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
-SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.1)
+# SCP_data <- readRDS("~/Documents/SC_Prostate/Data/SC_Prostate_processed.rds")
+SCP_data <- SetIdent(SCP_data, value = SCP_data$RNA_snn_res.0.1)
 ```
 
 ## 2. Plot clusters.
@@ -106,7 +106,7 @@ Export each cluster information as a single data.frame:
 
 ```{r}
 
-path <- "~/Documents/SC_Prostate/Output/GSEA_markers_res=1/"
+path <- "~/Documents/SC_Prostate/Output/GSEA_markers_res=0.1/"
 
 for (cluster in names(result_list)) {
   df <- result_list[[cluster]]

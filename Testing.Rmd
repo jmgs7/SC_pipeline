@@ -553,6 +553,11 @@ Compare:
 cell.DE + bulk.DE
 ```
 
+```{r}
+DimPlot(SCP_data, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4, group.by = "orig.ident") + theme(axis.title = element_text(size = 15), legend.text = element_text(size = 10), axis.text = element_text(size = 10)) + guides(colour = guide_legend(override.aes = list(size = 3)))
+```
+
+
 ```{r session_info}
 
 sessionInfo()
