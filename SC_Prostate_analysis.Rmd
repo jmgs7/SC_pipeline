@@ -121,7 +121,7 @@ saveRDS(SCP_data, file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 
 ```{r load_raw_data, include = FALSE}
 
-SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
+# SCP_data <- readRDS(file = "~/Documents/SC_Prostate/Data/SC_Prostate_raw.rds")
 ```
 
 
@@ -260,7 +260,7 @@ It is important to notice that a new reduction is created called "harmony". We n
 
 ```{r clustering}
 
-resolutions = c(0.1, 0.5, 1)
+resolutions = c(0.2, 0.4, 1)
 
 # Resolution fine-tuned in a separate Rmd.
 SCP_data <- FindNeighbors(SCP_data, dims = 1:20, reduction = "harmony")
